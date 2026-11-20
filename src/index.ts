@@ -7,12 +7,14 @@ import path from "node:path";
 // isn't a terminal or NO_COLOR is set, and adds them with FORCE_COLOR
 import { styleText } from "node:util";
 
-/** Connection information passed to `fetch` as the second argument. */
-export type FetchInfo = { ip?: string };
+/**
+ * The default export of the app's module: `Bun.serve` options, exactly what
+ * Bun serves by itself. crumpet adds its routes and sets `development`.
+ */
+type App = Bun.Serve.Options<any>;
 
-type App = {
-	fetch(req: Request, info?: FetchInfo): Response | Promise<Response>;
-};
+/** The app's own Bun routes. A framework instance can have an unrelated `routes` array. */
+const appRoutes = (app: App) => (Array.isArray(app.routes) ? {} : app.routes);
 
 /** Tags for one client entry point, by kind. */
 type Entry = { scripts: string[]; styles: string[]; preloads: string[] };
@@ -48,6 +50,9 @@ let devScript = "";
 const reloadPath = "/_crumpet/reload";
 const filePath = "/_crumpet/file/";
 
+/** Files `client.url()` has returned in dev: the only ones the dev server sends. */
+const served = new Set<string>();
+
 export const client = {
 	/**
 	 * @param entries client entry points as passed to `build()`, all of them by default
@@ -65,7 +70,8 @@ export const client = {
 		};
 		html = "";
 		for (const name of entries.length ? entries : Object.keys(manifest)) {
-			const entry = manifest[name];
+			// the manifest's names are normalized: `./src/main.ts` is `src/main.ts`
+			const entry = manifest[path.normalize(name)];
 			if (!entry) throw new Error(`crumpet: "${name}" is not a client entry point.`);
 			for (const url of entry.styles) tag(url, `<link rel="stylesheet" href="${url}">`);
 			for (const url of entry.preloads) tag(url, `<link rel="modulepreload" href="${url}">`);
@@ -82,12 +88,14 @@ export const client = {
 	 */
 	url(file: string) {
 		if (bundled || !path.isAbsolute(file)) return file;
+		served.add(file);
 		return filePath + path.relative(process.cwd(), file);
 	},
 };
 
-const clientConfig = (entrypoints: string[]): BuildConfig => ({
-	entrypoints,
+/** The app's client options with crumpet's own on top. */
+const clientConfig = (client: BuildConfig): BuildConfig => ({
+	...client,
 	naming: {
 		entry: "_immutable/[name]-[hash].[ext]",
 		chunk: "_immutable/[name]-[hash].[ext]",
@@ -144,33 +152,41 @@ const toManifest = (result: BuildOutput): Manifest => {
 
 export type BuildOptions = {
 	/**
-	 * - `"dev"`: serves the app with the client built in memory and reloads
+	 * Named after `Bun.serve`'s option, which it also sets.
+	 *
+	 * - `true`: serves the app with the client built in memory and reloads
 	 *   pages on changes. Run under `bun --watch`, which restarts it when server
 	 *   code changes.
-	 * - `"build"`: writes `dist/` and exits.
+	 * - `false`: writes `dist/` and exits.
 	 *
-	 * @default "build"
+	 * @default false
 	 */
-	mode?: "dev" | "build";
-	/** The app's module, such as `"src/server/app.tsx"`, whose default export has `fetch`. */
+	development?: boolean;
+	/** The app's module, such as `"src/server/app.tsx"`, whose default export is `Bun.serve` options. */
 	server: string;
-	/** Client entry points, such as `["src/client/main.ts", "src/client/main.css"]`. */
-	client: string[];
-	/** Dev server port. @default Bun.env.PORT, or 5173 */
-	port?: number;
+	/**
+	 * `Bun.build` options for the client. `entrypoints` are the client entry
+	 * points, such as `["src/client/main.ts", "src/client/main.css"]`. crumpet
+	 * sets `outdir`, `naming`, `publicPath`, `splitting` and `metafile` itself.
+	 */
+	client: BuildConfig;
 };
 
 /**
- * Builds the app, or serves it in dev, depending on `mode`. Called from the
- * app's `build.ts`:
+ * Serves the app in development, or builds it. Called from the app's
+ * `build.ts`:
  *
  * ```ts
- * const mode = process.execArgv.includes("--watch") ? "dev" : "build";
- * await build({ mode, server: "src/server/app.tsx", client: ["src/client/main.ts"] });
+ * const development = process.execArgv.includes("--watch");
+ * await build({ development, server: "src/server/app.tsx", client: { entrypoints: ["src/client/main.ts"] } });
  * ```
+ *
+ * @returns the dev server in development, nothing after a build
  */
-export const build = async (options: BuildOptions) =>
-	options.mode === "dev" ? dev(options) : bundle(options);
+export const build = async (options: BuildOptions) => {
+	if (options.development) return dev(options);
+	await bundle(options);
+};
 
 /** Serves the app with a client build in memory. */
 const dev = async (options: BuildOptions) => {
@@ -187,22 +203,52 @@ const dev = async (options: BuildOptions) => {
 
 	// the app and the first client build, at the same time; the app is imported
 	// here so it's in this process's module graph and `bun --watch` restarts on its changes
+	const config: BuildConfig = { sourcemap: "inline", ...clientConfig(options.client) };
 	const [{ default: app }, first] = await Promise.all([
 		import(path.resolve(options.server)) as Promise<{ default: App }>,
-		Bun.build({ ...clientConfig(options.client), sourcemap: "inline" }),
+		Bun.build(config),
 	]);
 
+	/** `ws.data` of the reload sockets, to tell them from the app's own. */
+	const reload = {};
+
 	const fixed = {
-		[reloadPath]: (req: Request, server: Server<undefined>) =>
-			server.upgrade(req) ? undefined : new Response(null, { status: 400 }),
-		// Bun's directory route rejects `..` and other paths outside the folder
-		[filePath + "*"]: { dir: process.cwd() },
+		[reloadPath]: (req: Request, server: Server<unknown>) =>
+			server.upgrade(req, { data: reload }) ? undefined : new Response(null, { status: 400 }),
+		// only files `client.url()` has returned, never the rest of the project
+		[filePath + "*"]: (req: Request) => {
+			const file = path.resolve(
+				decodeURIComponent(new URL(req.url).pathname.slice(filePath.length)),
+			);
+			return served.has(file)
+				? new Response(Bun.file(file), { headers: { "cache-control": "no-cache" } })
+				: new Response(null, { status: 404 });
+		},
+	};
+
+	// Client files aren't in the server's module graph, so `bun --watch` doesn't
+	// see them. The entry points' folders are watched with their subfolders, and
+	// so is the folder of every other file a build read, wherever it is.
+	const roots = [...new Set(config.entrypoints.map((e) => path.resolve(path.dirname(e))))];
+	const watched = new Set<string>();
+	const watch = (dir: string, recursive = false) => {
+		if (
+			watched.has(dir) ||
+			dir.split(path.sep).includes("node_modules") ||
+			(!recursive && roots.some((root) => dir.startsWith(root + path.sep)))
+		)
+			return;
+		watched.add(dir);
+		(async () => {
+			for await (const _ of fs.watch(dir, { recursive })) void changed();
+		})().catch(() => watched.delete(dir)); // not a folder: a plugin's virtual file
 	};
 
 	/** The client build as routes, served from memory without caching. */
 	const clientRoutes = (result: BuildOutput) => {
 		manifest = toManifest(result);
 		heads.clear();
+		for (const input in result.metafile!.inputs) watch(path.resolve(path.dirname(input)));
 		return Object.fromEntries(
 			result.outputs.map((o) => [
 				url(o.path),
@@ -211,22 +257,30 @@ const dev = async (options: BuildOptions) => {
 		);
 	};
 
-	const websocket = {
-		open: (ws: Bun.ServerWebSocket<undefined>) => {
-			ws.subscribe("reload");
-		},
-		message() {},
+	// Bun has one `websocket` handler per server: reload sockets are handled
+	// here, the app's sockets by the app's handler
+	const theirs = app.websocket;
+	const websocket: Bun.WebSocketHandler<any> = {
+		...theirs,
+		open: (ws) => (ws.data === reload ? void ws.subscribe(reloadPath) : theirs?.open?.(ws)),
+		message: (ws, message) => (ws.data === reload ? undefined : theirs?.message?.(ws, message)),
+		close: (ws, code, reason) => (ws.data === reload ? undefined : theirs?.close?.(ws, code, reason)),
+		drain: (ws) => (ws.data === reload ? undefined : theirs?.drain?.(ws)),
 	};
 
+	const routes = (client: Record<string, Response>) => ({ ...fixed, ...client, ...appRoutes(app) });
+
 	if (!first.success) console.error(first.logs);
+	for (const root of roots) watch(root, true);
 	const server = Bun.serve({
-		port: options.port ?? Bun.env.PORT ?? 5173,
+		port: Bun.env.PORT ?? 5173,
+		// not the whole network, unless the app says so
+		hostname: "localhost",
+		...app,
 		development: true,
-		routes: { ...fixed, ...(first.success ? clientRoutes(first) : {}) },
+		routes: routes(first.success ? clientRoutes(first) : {}),
 		websocket,
-		fetch: (req, server) =>
-			app.fetch(req, { ip: server.requestIP(req)?.address }),
-	});
+	} as App);
 
 	// One save can send several events, and a change can come in during a
 	// rebuild: wait briefly, run one rebuild at a time, then one more if
@@ -245,24 +299,23 @@ const dev = async (options: BuildOptions) => {
 		let ok = false;
 		do {
 			again = false;
-			const result = await Bun.build({ ...clientConfig(options.client), sourcemap: "inline" });
+			const result = await Bun.build(config);
 			ok = result.success;
 			if (!ok) console.error(result.logs);
-			else server.reload({ routes: { ...fixed, ...clientRoutes(result) }, websocket });
+			else
+				server.reload({
+					...app,
+					development: true,
+					routes: routes(clientRoutes(result)),
+					websocket,
+				} as App);
 		} while (again);
 		building = false;
 		if (ok) {
 			console.log(styleText("dim", `client rebuilt in ${Math.round(performance.now() - started)} ms`));
 		}
-		server.publish("reload", "reload");
+		server.publish(reloadPath, "reload");
 	};
-
-	// client files aren't in the server's module graph, so `bun --watch` doesn't see them
-	for (const dir of new Set(options.client.map((e) => path.dirname(e)))) {
-		(async () => {
-			for await (const _ of fs.watch(dir, { recursive: true })) void changed();
-		})().catch((error) => console.error(`crumpet: stopped watching ${dir}`, error));
-	}
 
 	console.log(
 		`\n${styleText(["bold", "green"], "crumpet dev")}  ${styleText("cyan", server.url.href)}  ${styleText("dim", `ready in ${Math.round(performance.now() - start)} ms`)}\n`,
@@ -277,24 +330,25 @@ const dev = async (options: BuildOptions) => {
  * @internal used by the generated entry, not by apps
  */
 export const production = (app: App) => {
-	const dir = new URL("../client/", import.meta.url).pathname;
+	const dir = Bun.fileURLToPath(new URL("../client/", import.meta.url));
 	return {
+		...app,
 		// Bun.serve runs in development mode unless NODE_ENV is production
 		development: false,
-		routes: Object.fromEntries(
-			built!.files.map((file) => [
-				"/" + file,
-				new Response(Bun.file(dir + file), {
-					headers: file.startsWith("_immutable/")
-						? { "cache-control": "public, immutable, max-age=31536000" }
-						: {},
-				}),
-			]),
-		),
-		// Bun passes its server; the app gets the client IP as `info.ip`
-		fetch: (req: Request, server: Server<undefined>) =>
-			app.fetch(req, { ip: server.requestIP(req)?.address }),
-	};
+		routes: {
+			...Object.fromEntries(
+				built!.files.map((file) => [
+					"/" + file,
+					new Response(Bun.file(path.join(dir, file)), {
+						headers: file.startsWith("_immutable/")
+							? { "cache-control": "public, immutable, max-age=31536000" }
+							: {},
+					}),
+				]),
+			),
+			...appRoutes(app),
+		},
+	} as App;
 };
 
 /**
@@ -310,9 +364,9 @@ const bundle = async (options: BuildOptions) => {
 	const entry = path.resolve(".crumpet-entry.ts");
 	const [clientResult, serverResult] = await Promise.all([
 		Bun.build({
+			minify: true,
 			...clientConfig(options.client),
 			outdir: "dist/client",
-			minify: true,
 		}),
 		Bun.build({
 			entrypoints: [entry],

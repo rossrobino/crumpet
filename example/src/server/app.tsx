@@ -12,4 +12,8 @@ const home = Route.get("/").use((c) => (
 
 const app = new App().use(home);
 
-export default app;
+// what Bun serves: `bun src/server/app.tsx` works too, without the client files
+export default {
+	// ovr takes the client IP as an option; Bun has it on the server
+	fetch: (req, server) => app.fetch(req, { ip: server.requestIP(req)?.address }),
+} satisfies Bun.Serve.Options<undefined>;
