@@ -27,7 +27,7 @@ It works with any framework that exposes a `fetch` handler: [ovr](https://github
 - **One import path, `crumpet`:** `build` for `build.ts`, `client` for app code, and types.
 - **`bun --watch` for dev,** with a small reload script of crumpet's own.
 - **Client and server build at the same time.** The manifest isn't baked into the server bundle: `build()` writes `dist/server/manifest.json` (private, next to the bundle), and crumpet reads it with a top-level await when the bundle starts. So `client.head()` works even at the top level of app modules. No plugin needed.
-- **The production server serves the client files.** Bun has no built-in static file serving, so the bundle's default export has Bun `routes` for `dist/client/`.
+- **The production server serves the client files.** The bundle's default export has a Bun route for each file in `dist/client/`. Bun's own directory routes (`{ dir }`) take no headers, so they can't send the immutable `Cache-Control` for `_immutable/`.
 - **Standard imports instead of Vite query strings.** `?raw` becomes `with { type: "text" }`; `?url` becomes a file import passed to `client.url()`.
 - **Path aliases are the app's business,** through tsconfig `paths`, which Bun reads.
 - **Vercel is a separate function,** `vercel(options)`, which `build.ts` calls after `build()`. It reads `dist/` and writes the Build Output API. It does nothing in development, so it needs no condition; an app that only wants it on Vercel puts it behind `if (Bun.env.VERCEL)`. No `public/` folder or other file conventions, and `build()` doesn't look at the environment.
@@ -146,7 +146,7 @@ export const Layout = (props: { title: string; children?: JSX.Element }) => (
 ## Things Bun didn't do, found while building it
 
 - **`Bun.serve` passes its `server` as `fetch`'s second argument.** ovr's `App.fetch` takes `{ ip, ...RequestInit }` there, so the app wraps it in its default export: `(req, server) => app.fetch(req, { ip: server.requestIP(req)?.address })`, as ovr's docs show for Bun. crumpet used to do this for the app; now the export is plain `Bun.serve` options and crumpet stays out of `fetch`.
-- **No built-in static file serving.** The production server adds `routes` for `dist/client/`.
+- **Directory routes take no headers.** `"/*": { dir }` serves a folder but can't set `Cache-Control`, so the production server adds a route per file in `dist/client/`.
 - **`Bun.serve` runs in development mode by default** unless `NODE_ENV=production`, with Bun's error pages. The bundle's default export sets `development: false`.
 - **Client files aren't watched by `bun --watch`.** A file imported from server code with a loader (`with { type: "file" }`) is watched, but not the files it imports: editing `client.ts` restarts the server, editing a module `client.ts` imports doesn't. Dev mode watches the client folders itself.
 - **Loaders don't build client entry points from server code.** CSS imported by server code is bundled into one file named after the server entry, with no hash and no URL in the import. `with { type: "file" }` copies a `.ts` file as it is, unbundled. The `file` loader is still the way to get hashed URLs for fonts and images.
@@ -154,7 +154,7 @@ export const Layout = (props: { title: string; children?: JSX.Element }) => (
 - **A CSS entry point also writes an empty `.js` file,** which the build deletes.
 - **CSS `url()` files under 128 KB are inlined as data URLs,** and no option turns it off ([oven-sh/bun#26575](https://github.com/oven-sh/bun/issues/26575); a fix, [#28923](https://github.com/oven-sh/bun/pull/28923), was closed without merging). That's fine for icons and small images, and for a font used only from CSS (one less request, no flash of fallback text). It costs when the font is also preloaded with `client.url()` (downloaded twice), when there are several fonts or weights (all of them are downloaded, used or not), or when the CSS changes often (the font is downloaded again with each new stylesheet). Workaround when it matters: declare `@font-face` in the server-rendered `<head>` with `client.url(font)`.
 - **Bun's own HTML imports and HMR don't fit:** they need an HTML file per page, which ovr apps don't have. Tested and set aside.
-- **File and text imports need type declarations** (`*.woff2`, `*.md`). crumpet ships them, like `domco/env`.
+- **File and text imports need type declarations** for extensions Bun's types don't cover (`*.woff2`, `*.md`, images). They're Bun features, so the app declares the ones it imports, as `example/src/env.d.ts` does; crumpet ships no type file for them.
 
 ## Vercel
 

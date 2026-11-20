@@ -299,7 +299,6 @@ const dev = async (options: BuildOptions) => {
 	if (!first.success) console.error(first.logs);
 	for (const root of roots) watch(root, true);
 	const server = Bun.serve({
-		port: Bun.env.PORT ?? 5173,
 		// not the whole network, unless the app says so
 		hostname: "localhost",
 		...app,
