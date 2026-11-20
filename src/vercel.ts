@@ -171,19 +171,7 @@ export const onVercel = (
 	};
 };
 
-/**
- * Writes `.vercel/output/` from `dist/`. Call it after `build()`:
- *
- * ```ts
- * await build({ development, server, client });
- * if (Bun.env.VERCEL) await vercel({ isr: { expiration: 60 } });
- * ```
- *
- * - `static/`: `dist/client/`, served by Vercel's CDN
- * - `functions/fn.func/`: `dist/server/` and a `main.js` that exports the app
- *   for Vercel's Bun runtime
- * - `config.json`: the routes
- */
+/** `vercel()` without the development check. Documented in `index.ts`. */
 export const vercel = async (options: VercelOptions = {}) => {
 	const out = path.join(".vercel", "output");
 	const fn = path.join(out, "functions", "fn.func");

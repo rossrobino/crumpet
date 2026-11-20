@@ -4,7 +4,7 @@ import { App, Route } from "ovr";
 
 const home = Route.get("/").use((c) => (
 	<Layout title="Home">
-		<h1>crumpet + ovr</h1>
+		<h1 class="text-3xl font-bold underline">crumpet + ovr</h1>
 		<p id="ip">{c.ip ?? "no ip"}</p>
 		<pre>{note}</pre>
 	</Layout>

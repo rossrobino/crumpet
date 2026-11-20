@@ -30,7 +30,7 @@ It works with any framework that exposes a `fetch` handler: [ovr](https://github
 - **The production server serves the client files.** Bun has no built-in static file serving, so the bundle's default export has Bun `routes` for `dist/client/`.
 - **Standard imports instead of Vite query strings.** `?raw` becomes `with { type: "text" }`; `?url` becomes a file import passed to `client.url()`.
 - **Path aliases are the app's business,** through tsconfig `paths`, which Bun reads.
-- **Vercel is a separate function,** `vercel(options)`, which `build.ts` calls after `build()` (behind `if (Bun.env.VERCEL)` if the app wants). It reads `dist/` and writes the Build Output API. No `public/` folder or other file conventions, and `build()` doesn't look at the environment.
+- **Vercel is a separate function,** `vercel(options)`, which `build.ts` calls after `build()`. It reads `dist/` and writes the Build Output API. It does nothing in development, so it needs no condition; an app that only wants it on Vercel puts it behind `if (Bun.env.VERCEL)`. No `public/` folder or other file conventions, and `build()` doesn't look at the environment.
 - **No source maps in production,** inline ones in dev.
 - **No Cloudflare, no prerendering.** ISR stays available but isn't a focus.
 
@@ -113,6 +113,7 @@ export const Layout = (props: { title: string; children?: JSX.Element }) => (
 | `@/` aliases | Resolved by Bun from tsconfig `paths` |
 | Client IP | The example passes `server.requestIP()` to ovr itself, in dev and production; not taken from `X-Forwarded-For` |
 | `bun dist/server/app.js` | Serves the app and the client files, with `Cache-Control: public, immutable, max-age=31536000` for `_immutable/` |
+| Tailwind | `bun-plugin-tailwind` 0.1.2 (Tailwind 4.3.5) in `client.plugins`: classes used in server and client files are in the CSS, in the build and in dev after either kind of edit |
 | `bun check` | No type errors |
 
 ## What crumpet's code does
@@ -203,7 +204,7 @@ The behavior is specified by `src/vercel.test.ts`, ported from domco's Vercel ad
 | `prerender` | 8 | Dropped; render at request time, or ISR |
 | `import.meta.glob` | 7 | `fs.glob` or `Bun.Glob` |
 | `@robino/md` plugin | 7 | A step in `build.ts` before the build, or `Processor` at runtime |
-| Tailwind plugin | 6 | Tailwind CLI in `build.ts`, or a `client` plugin |
+| Tailwind plugin | 6 | `plugins: [tailwind]` in `client`, from `bun-plugin-tailwind`, and `@import "tailwindcss"` in the CSS entry |
 | `?raw` | 5 | `with { type: "text" }` |
 | `client:page` (`+page.html`) | 3 | Dropped; render the page on the server |
 | `import.meta.env` | 2 | `process.env` or `Bun.env` |
@@ -220,7 +221,6 @@ The behavior is specified by `src/vercel.test.ts`, ported from domco's Vercel ad
 
 ## Open questions
 
-- Try Tailwind as a `client.plugins` entry (`bun-plugin-tailwind`), which would rebuild with the client in dev. Not tested yet. If it doesn't fit: how should steps that also watch in dev (`tailwindcss --watch`) run?
 - Deploy the example with the Build Output API on the Bun runtime and answer the questions under "Vercel".
 - Hot-swap CSS in dev instead of reloading the page?
 - Wait for Bun to let CSS assets stay files, or work around it?

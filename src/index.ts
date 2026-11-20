@@ -7,7 +7,9 @@ import path from "node:path";
 // isn't a terminal or NO_COLOR is set, and adds them with FORCE_COLOR
 import { styleText } from "node:util";
 
-export { onVercel, vercel, type VercelOptions } from "./vercel.ts";
+import { type VercelOptions, vercel as output } from "./vercel.ts";
+
+export { onVercel, type VercelOptions } from "./vercel.ts";
 
 /**
  * The default export of the app's module: `Bun.serve` options, exactly what
@@ -186,8 +188,30 @@ export type BuildOptions = {
  * @returns the dev server in development, nothing after a build
  */
 export const build = async (options: BuildOptions) => {
-	if (options.development) return dev(options);
+	development = Boolean(options.development);
+	if (development) return dev(options);
 	await bundle(options);
+};
+
+/** Set by `build()`: in development there's no `dist/` for `vercel()` to use. */
+let development = false;
+
+/**
+ * Writes `.vercel/output/` from `dist/`, Vercel's Build Output API. Call it
+ * after `build()`. It does nothing in development, so it needs no condition:
+ *
+ * ```ts
+ * await build({ development, server, client });
+ * await vercel({ isr: { expiration: 60 } });
+ * ```
+ *
+ * - `static/`: `dist/client/`, served by Vercel's CDN
+ * - `functions/fn.func/`: `dist/server/` and a `main.js` that exports the app
+ *   for Vercel's Bun runtime
+ * - `config.json`: the routes
+ */
+export const vercel = async (options?: VercelOptions) => {
+	if (!development) await output(options);
 };
 
 /** Serves the app with a client build in memory. */
