@@ -1,4 +1,4 @@
-import { build } from "crumpet";
+import { build, vercel } from "crumpet";
 
 // `bun --watch build.ts` runs the dev server, `bun build.ts` builds
 const development = process.execArgv.includes("--watch");
@@ -13,3 +13,6 @@ await build({
 	server: "src/server/app.tsx",
 	client: { entrypoints: ["src/client/main.ts", "src/client/main.css"] },
 });
+
+// on Vercel, also write its build output from `dist/`
+await vercel();

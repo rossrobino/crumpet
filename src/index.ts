@@ -7,6 +7,8 @@ import path from "node:path";
 // isn't a terminal or NO_COLOR is set, and adds them with FORCE_COLOR
 import { styleText } from "node:util";
 
+export { onVercel, vercel, type VercelOptions } from "./vercel.ts";
+
 /**
  * The default export of the app's module: `Bun.serve` options, exactly what
  * Bun serves by itself. crumpet adds its routes and sets `development`.
@@ -372,9 +374,11 @@ const bundle = async (options: BuildOptions) => {
 			entrypoints: [entry],
 			files: {
 				[entry]: `import app from ${JSON.stringify(path.resolve(options.server))};
-import { production } from "crumpet";
+import { onVercel, production } from "crumpet";
 
 export default production(app);
+// for the function \`vercel()\` writes
+export const vercel = (options) => onVercel(app, options);
 `,
 			},
 			target: "bun",

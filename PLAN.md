@@ -1,6 +1,6 @@
 # crumpet: project plan
 
-Status: a working prototype. `src/index.ts` (about 480 lines) and `example/` (an ovr app) run in dev and production on Bun 1.4.5. `crumpet@0.0.2` on npm is a placeholder that holds the name.
+Status: a working prototype. `src/index.ts`, `src/vercel.ts` and `example/` (an ovr app) run in dev and production on Bun 1.4.5, and `vercel()` writes a Vercel build that hasn't been deployed yet. `bun test` runs the Vercel tests. `crumpet@0.0.2` on npm is a placeholder that holds the name.
 
 ## What it is
 
@@ -136,7 +136,11 @@ export const Layout = (props: { title: string; children?: JSX.Element }) => (
    - `minify: { syntax: true }` on the server folds constants; names and lines stay readable for stack traces. Dev and build code is tree-shaken out of the bundle.
    - Then, at the same time: deletes the empty files and writes `dist/server/manifest.json` (the entries' tags from the client's metafile, and the list of client files for the routes, so the server doesn't scan the folder).
    - Prints each output file with its size, the gzip size for text files, and the build time, like Vite. `Bun.build()` prints nothing itself (only the `bun build` command does). Colors come from `node:util`'s `styleText`, which Bun implements and which leaves them out when the output isn't a terminal or `NO_COLOR` is set.
-5. **Vercel output** (not in the prototype yet): the Build Output API in `.vercel/output/`, ported from `@domcojs/vercel`.
+5. **`vercel(options)`** (`src/vercel.ts`), called after `build()`:
+   - Copies `dist/client/` to `.vercel/output/static/` and `dist/server/` to `functions/fn.func/`, and writes `config.json`, `.vc-config.json`, `package.json` and, with ISR, `fn.prerender-config.json`. No second build.
+   - Writes the function's `main.js`: `import { vercel } from "./app.js"; export default vercel({ isr })`. `vercel` is a second export of every server bundle (about 1 kB): `onVercel(app, options)` around the app's own export, without the static file routes, which Vercel's CDN serves.
+   - `onVercel` wraps `fetch` only: the request gets the client's protocol from `X-Forwarded-Proto` and, with ISR, its path back from `__pathname`; the server it passes returns the last valid address in `X-Forwarded-For` from `requestIP()`, so the app's `server.requestIP(req)` is the same code everywhere. The app's own Bun `routes` aren't wrapped.
+   - Not ported from domco: the Node.js entries, and the dev redirect for `/_vercel/image` (an app can add a Bun route for it).
 
 ## Things Bun didn't do, found while building it
 
@@ -173,14 +177,16 @@ Questions only a deploy can answer:
 - Which Bun version does `runtime: "bun1.x"` in `.vc-config.json` run? `vercel.json`'s `bunVersion` distinguishes `"1.4.x"` from `"1.x"` (Bun 1.3.14); the Build Output API may need the same.
 - Does `server.requestIP(req)` return the client's address on Vercel, or should crumpet read `X-Forwarded-For` there, as `@domcojs/vercel`'s Bun entry does?
 - Does streaming work through the Bun runtime?
+- Does Vercel pass a server to the function's `fetch`, and does it already fix the protocol and `requestIP()`? If so `onVercel` shrinks to ISR.
+- Does the function honor the app's own `routes`, and is `framework: { slug: "crumpet" }` accepted in `config.json`?
 
-The behavior to keep is specified by domco's Vercel adapter tests, `packages/vercel/src/index.test.ts` in the domco repo:
+The behavior is specified by `src/vercel.test.ts`, ported from domco's Vercel adapter tests:
 
 - **Routes, in order:** trailing-slash redirects (308, when the option is set), immutable cache headers for `/_immutable/`, the filesystem for `GET`, then everything else to the function.
 - **The function route:** a plain rewrite to `/fn`. Only with ISR does it add `?__pathname=$1`, which the entry moves back into the pathname.
 - **Function config:** `handler: "main.js"`, `supportsResponseStreaming: true`, user options merged in, and a `package.json` with `"type": "module"`.
-- **Images:** the `images` option in `config.json`, and the dev redirect for `/_vercel/image`.
-- **Requests:** the protocol from `X-Forwarded-Proto`, and the client IP from the last address in `X-Forwarded-For`. Now that the app reads the IP from Bun's server itself, `vercel()` has to make `server.requestIP()` right on Vercel, or the app reads the header there: to settle with the first deploy.
+- **Images:** the `images` option in `config.json`.
+- **Requests:** the protocol from `X-Forwarded-Proto`, and the client IP from the last address in `X-Forwarded-For`, returned by `server.requestIP()`.
 - **ISR, when set:** a `prerender-config.json` with `expiration`, `group: 1`, `passQuery: true` and `allowQuery` including `__pathname`.
 
 ## Switching from domco
