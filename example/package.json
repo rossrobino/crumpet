@@ -1,0 +1,16 @@
+{
+	"name": "crumpet-example",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "bun --watch build.ts",
+		"build": "bun build.ts",
+		"start": "bun dist/server/app.js"
+	},
+	"dependencies": {
+		"ovr": "7.0.0-next.85"
+	},
+	"devDependencies": {
+		"@types/bun": "^1.4.4"
+	}
+}

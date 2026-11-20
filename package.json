@@ -1,0 +1,23 @@
+{
+	"name": "crumpet",
+	"description": "A full-stack toolchain for Bun",
+	"version": "0.0.2",
+	"author": {
+		"name": "Ross Robino",
+		"url": "https://robino.dev"
+	},
+	"license": "MIT",
+	"keywords": [
+		"bun",
+		"full-stack",
+		"ssr"
+	],
+	"type": "module",
+	"sideEffects": false,
+	"exports": {
+		".": "./index.js"
+	},
+	"files": [
+		"index.js"
+	]
+}

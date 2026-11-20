@@ -1,0 +1,6 @@
+@import "./base.css";
+
+@font-face {
+	font-family: Example;
+	src: url("./fonts/font.woff2") format("woff2");
+}

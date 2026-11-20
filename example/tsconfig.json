@@ -1,0 +1,16 @@
+{
+	"compilerOptions": {
+		"target": "ESNext",
+		"module": "Preserve",
+		"moduleResolution": "bundler",
+		"allowImportingTsExtensions": true,
+		"jsx": "react-jsx",
+		"jsxImportSource": "ovr",
+		"strict": true,
+		"noEmit": true,
+		"skipLibCheck": true,
+		"types": ["bun"],
+		"paths": { "crumpet": ["../src/index.ts"], "@/*": ["./src/*"] }
+	},
+	"include": ["src", "*.ts", "../src"]
+}
