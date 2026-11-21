@@ -1,7 +1,7 @@
 {
 	"name": "crumpet",
 	"description": "A full-stack toolchain for Bun",
-	"version": "0.0.2",
+	"version": "0.0.3",
 	"author": {
 		"name": "Ross Robino",
 		"url": "https://robino.dev"
@@ -19,6 +19,9 @@
 		"ssr"
 	],
 	"type": "module",
+	"engines": {
+		"bun": ">=1.4.5"
+	},
 	"sideEffects": false,
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",

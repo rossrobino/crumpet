@@ -1,4 +1,4 @@
-// Prototype: how much code crumpet needs on top of Bun. Not the final API.
+// crumpet: `build()`, `client` and the dev and production servers, on top of Bun.
 import type { BuildConfig, BuildOutput, Server } from "bun";
 // Bun has no file watcher, recursive delete or rename of its own, and `path` is plain string work
 import fs from "node:fs/promises";
