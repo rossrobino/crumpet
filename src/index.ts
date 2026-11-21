@@ -143,7 +143,11 @@ const toManifest = (result: BuildOutput): Manifest => {
 	const m: Manifest = {};
 	for (const [file, out] of outputs) {
 		if (!out.entryPoint) continue;
-		m[path.normalize(out.entryPoint)] = file.endsWith(".css")
+		const css = file.endsWith(".css");
+		// the CSS a script imports is an output with the script's entry point:
+		// it's that entry's `cssBundle`, not an entry of its own
+		if (css && !out.entryPoint.endsWith(".css")) continue;
+		m[path.normalize(out.entryPoint)] = css
 			? { scripts: [], styles: [file], preloads: [] }
 			: {
 					scripts: [file],
@@ -229,7 +233,8 @@ const dev = async (options: BuildOptions) => {
 
 	// the app and the first client build, at the same time; the app is imported
 	// here so it's in this process's module graph and `bun --watch` restarts on its changes
-	const config: BuildConfig = { sourcemap: "inline", ...clientConfig(options.client) };
+	// `throw: false`: a build that fails is logged, and the last one stays up
+	const config: BuildConfig = { sourcemap: "inline", ...clientConfig(options.client), throw: false };
 	const [{ default: app }, first] = await Promise.all([
 		import(path.resolve(options.server)) as Promise<{ default: App }>,
 		Bun.build(config),
@@ -392,6 +397,8 @@ const bundle = async (options: BuildOptions) => {
 			minify: true,
 			...clientConfig(options.client),
 			outdir: "dist/client",
+			// a build that fails throws, with Bun's own errors
+			throw: true,
 		}),
 		Bun.build({
 			entrypoints: [entry],
@@ -418,11 +425,6 @@ export const vercel = (options) => onVercel(app, options);
 			minify: { syntax: true },
 		}),
 	]);
-	if (!clientResult.success)
-		throw new AggregateError(clientResult.logs, "Client build failed.");
-	if (!serverResult.success)
-		throw new AggregateError(serverResult.logs, "Server build failed.");
-
 	const client = path.resolve("dist/client");
 	// a CSS entry point also writes an empty JavaScript file
 	const empty = clientResult.outputs.filter((o) => o.size === 0);
