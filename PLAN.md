@@ -43,12 +43,13 @@ example/
   src/
     server/
       app.tsx       ovr App, default export
-      layout.tsx    <html> with client.head() and a preloaded font
+      layout.tsx    <html> with client.head() and an icon's URL
       note.md       imported with { type: "text" }
     client/
       main.ts       imports mark.ts
       main.css      @import and an @font-face url()
       fonts/font.woff2
+      icon.svg      imported by the layout, through client.url()
   build.ts          calls build() with development: true under bun --watch
   tsconfig.json     jsxImportSource ovr, paths for @/
 ```
@@ -86,13 +87,13 @@ await build({
 // src/server/layout.tsx
 import { client } from "crumpet";
 import { Render, type JSX } from "ovr";
-import font from "@/client/fonts/font.woff2";
+import icon from "@/client/icon.svg";
 
 export const Layout = (props: { title: string; children?: JSX.Element }) => (
 	<html lang="en">
 		<head>
 			<title>{props.title}</title>
-			<link rel="preload" href={client.url(font)} as="font" type="font/woff2" crossorigin="anonymous" />
+			<link rel="icon" href={client.url(icon)} type="image/svg+xml" />
 			{Render.raw({ markup: client.head() })}
 		</head>
 		<body>{props.children}</body>
@@ -108,7 +109,7 @@ export const Layout = (props: { title: string; children?: JSX.Element }) => (
 | Client CSS edit | Rebuilt and the page reloads (no CSS hot swap) |
 | Client script edit | Rebuilt and the page reloads |
 | `client.head()` | Stylesheet, modulepreload and module script tags, in dev and production |
-| `client.url(font)` | A dev URL in dev, `/_immutable/font-<hash>.woff2` in production |
+| `client.url(icon)` | A dev URL in dev, `/_immutable/icon-<hash>.svg` in production |
 | Text imports | Work in dev and are inlined in the build |
 | `@/` aliases | Resolved by Bun from tsconfig `paths` |
 | Client IP | The example passes `server.requestIP()` to ovr itself, in dev and production; not taken from `X-Forwarded-For` |
@@ -152,7 +153,7 @@ export const Layout = (props: { title: string; children?: JSX.Element }) => (
 - **Loaders don't build client entry points from server code.** CSS imported by server code is bundled into one file named after the server entry, with no hash and no URL in the import. `with { type: "file" }` copies a `.ts` file as it is, unbundled. The `file` loader is still the way to get hashed URLs for fonts and images.
 - **Reloading after a server restart takes care.** The page keeps a connection open to the dev server; when `bun --watch` restarts, it drops, and reconnecting reloads the page. The first version used `EventSource`, but Bun only sends a stream's headers with its first chunk and browsers wait 3 s to reconnect, so it needed workarounds. It now uses Bun's WebSocket pub/sub, with a 100 ms retry in the page.
 - **A CSS entry point also writes an empty `.js` file,** which the build deletes.
-- **CSS `url()` files under 128 KB are inlined as data URLs,** and no option turns it off ([oven-sh/bun#26575](https://github.com/oven-sh/bun/issues/26575); a fix, [#28923](https://github.com/oven-sh/bun/pull/28923), was closed without merging). That's fine for icons and small images, and for a font used only from CSS (one less request, no flash of fallback text). It costs when the font is also preloaded with `client.url()` (downloaded twice), when there are several fonts or weights (all of them are downloaded, used or not), or when the CSS changes often (the font is downloaded again with each new stylesheet). Workaround when it matters: declare `@font-face` in the server-rendered `<head>` with `client.url(font)`.
+- **CSS `url()` files under 128 KB are inlined as data URLs,** in dev and in the build, and no option turns it off ([oven-sh/bun#26575](https://github.com/oven-sh/bun/issues/26575); a fix, [#28923](https://github.com/oven-sh/bun/pull/28923), was closed without merging). crumpet leaves this to Bun. The rule for apps: **don't preload a font under 128 KB that the CSS uses.** It arrives with the stylesheet, so a `<link rel="preload">` with `client.url(font)` would download it a second time. Preload only fonts of 128 KB or more, which stay files. Tried and taken out: building the server first and pointing the CSS at the server's copy of the file with an `onResolve` plugin. It worked, but it turned off Bun's inlining in the build only, so dev and production differed.
 - **Bun's own HTML imports and HMR don't fit:** they need an HTML file per page, which ovr apps don't have. Tested and set aside.
 - **File and text imports need type declarations** for extensions Bun's types don't cover (`*.woff2`, `*.md`, images). They're Bun features, so the app declares the ones it imports, as `example/src/env.d.ts` does; crumpet ships no type file for them.
 
