@@ -1,5 +1,7 @@
 // Prototype: how much code crumpet needs on top of Bun. Not the final API.
-import type { BuildConfig, BuildOutput, Server } from "bun";
+import type { BuildConfig, BuildOutput, BunPlugin, Server } from "bun";
+// a plugin's `onResolve` can't wait for a promise, so `shared()` reads files with these
+import { existsSync, readFileSync } from "node:fs";
 // Bun has no file watcher, recursive delete or rename of its own, and `path` is plain string work
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -36,9 +38,9 @@ type Built = {
 declare const __CRUMPET_BUNDLED__: true;
 const bundled = typeof __CRUMPET_BUNDLED__ !== "undefined";
 
-// Read when the bundle starts, next to it, so the client and server builds
-// don't wait on each other. Top-level await: modules that import crumpet run
-// after it, so `client.head()` works even at their top level.
+// Read when the bundle starts, next to it: the manifest is written after the
+// bundle. Top-level await: modules that import crumpet run after it, so
+// `client.head()` works even at their top level.
 const built: Built | undefined = bundled
 	? await Bun.file(new URL("./manifest.json", import.meta.url)).json()
 	: undefined;
@@ -382,9 +384,34 @@ export const production = (app: App) => {
 };
 
 /**
+ * Keeps a file the server imports as one file when the CSS uses it too. Bun
+ * inlines files under 128 KiB into the CSS as `data:` URLs, so a font the page
+ * also preloads with `client.url()` would be downloaded twice. Those `url()`s
+ * get the URL the server's build gave the file. Bun inlines the rest as usual.
+ *
+ * @param assets URLs of the files the server imports, by the hash of their content
+ */
+const shared = (assets: Map<number | bigint, string>): BunPlugin => ({
+	name: "crumpet",
+	setup(build) {
+		build.onResolve({ filter: /^[^:]+$/ }, (args) => {
+			// a `url()` in a stylesheet, not its `@import`s
+			if (!args.importer.endsWith(".css") || args.kind === "import-rule") return;
+			// `font.woff2?v=1#name` is the file `font.woff2`
+			const [name, rest = ""] = args.path.split(/(?=[?#])(.*)/s);
+			const file = path.resolve(args.resolveDir, name!);
+			if (!existsSync(file)) return;
+			const url = assets.get(Bun.hash(readFileSync(file)));
+			return url ? { path: url + rest, external: true } : undefined;
+		});
+	},
+});
+
+/**
  * Builds `dist/client/` (hashed files under `_immutable/`) and bundles the app
  * into `dist/server/app.js`, whose default export Bun serves by itself:
- * `bun dist/server/app.js`. The client and the server build at the same time.
+ * `bun dist/server/app.js`. The server builds first: the client's CSS needs
+ * to know which files the server imports. See `shared()`.
  */
 const bundle = async (options: BuildOptions) => {
 	const start = performance.now();
@@ -392,40 +419,48 @@ const bundle = async (options: BuildOptions) => {
 
 	// only exists in memory, through `Bun.build`'s `files`
 	const entry = path.resolve(".crumpet-entry.ts");
-	const [clientResult, serverResult] = await Promise.all([
-		Bun.build({
-			minify: true,
-			...clientConfig(options.client),
-			outdir: "dist/client",
-			// a build that fails throws, with Bun's own errors
-			throw: true,
-		}),
-		Bun.build({
-			entrypoints: [entry],
-			files: {
-				[entry]: `import app from ${JSON.stringify(path.resolve(options.server))};
+	const serverResult = await Bun.build({
+		entrypoints: [entry],
+		files: {
+			[entry]: `import app from ${JSON.stringify(path.resolve(options.server))};
 import { onVercel, production } from "crumpet";
 
 export default production(app);
 // for the function \`vercel()\` writes
 export const vercel = (options) => onVercel(app, options);
 `,
-			},
-			target: "bun",
-			// the bundle goes to `dist/server/`, and files it imports, such as
-			// fonts, straight to `dist/client/_immutable/` with the client's files
-			outdir: "dist/client",
-			naming: {
-				entry: "../server/app.js",
-				asset: "_immutable/[name]-[hash].[ext]",
-			},
-			publicPath: "/",
-			define: { __CRUMPET_BUNDLED__: "true" },
-			// folds `bundled` and drops dev-only code; names and lines stay readable
-			minify: { syntax: true },
-		}),
-	]);
+		},
+		target: "bun",
+		// the bundle goes to `dist/server/`, and files it imports, such as
+		// fonts, straight to `dist/client/_immutable/` with the client's files
+		outdir: "dist/client",
+		naming: {
+			entry: "../server/app.js",
+			asset: "_immutable/[name]-[hash].[ext]",
+		},
+		publicPath: "/",
+		define: { __CRUMPET_BUNDLED__: "true" },
+		// folds `bundled` and drops dev-only code; names and lines stay readable
+		minify: { syntax: true },
+	});
+
 	const client = path.resolve("dist/client");
+	const assets = new Map(
+		await Promise.all(
+			serverResult.outputs
+				.filter((o) => o.kind === "asset")
+				.map(async (o) => [Bun.hash(await o.arrayBuffer()), url(path.relative(client, o.path))] as const),
+		),
+	);
+	const clientResult = await Bun.build({
+		minify: true,
+		...clientConfig(options.client),
+		plugins: [shared(assets), ...(options.client.plugins ?? [])],
+		outdir: "dist/client",
+		// a build that fails throws, with Bun's own errors
+		throw: true,
+	});
+
 	// a CSS entry point also writes an empty JavaScript file
 	const empty = clientResult.outputs.filter((o) => o.size === 0);
 	const files = [...clientResult.outputs, ...serverResult.outputs]

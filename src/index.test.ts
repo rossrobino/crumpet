@@ -9,8 +9,10 @@ const crumpet = path.join(import.meta.dir, "index.ts");
 
 /** A marker in the module both entry points import, to find where it was bundled. */
 const marker = "shared-module-marker";
-// Bun inlines files under 128 KiB into the CSS as `data:` URLs; this one stays a file
-const font = new Uint8Array(200_000).map((_, i) => (i * 31) % 251);
+// Bun inlines files under 128 KiB into the CSS as `data:` URLs. Both are small
+// enough: the server imports the font too, only the CSS uses the dot.
+const font = new Uint8Array(20_000).map((_, i) => (i * 31) % 251);
+const dot = new Uint8Array(500).map((_, i) => (i * 17) % 251);
 
 const files: Record<string, string | Uint8Array> = {
 	"tsconfig.json": JSON.stringify({ compilerOptions: { paths: { crumpet: [crumpet] } } }),
@@ -62,8 +64,10 @@ console.log("entry a", shared);
 console.log("entry b", shared);
 `,
 	"src/client/a.css": ".a { color: red; }\n",
-	"src/client/main.css": `@font-face { font-family: "f"; src: url("./font.woff2"); }\nbody { margin: 0; }\n`,
+	"src/client/main.css": `@import "./fonts.css";\nbody { margin: 0; background: url("./dot.png"); }\n`,
+	"src/client/fonts.css": `@font-face { font-family: "f"; src: url("./font.woff2?v=1#f") format("woff2"); }\n`,
 	"src/client/font.woff2": font,
+	"src/client/dot.png": dot,
 	// outside the entry points' folder, so it's only watched because a build read it
 	"src/lib/shared.ts": `export const shared = "${marker}";\n`,
 };
@@ -249,12 +253,20 @@ describe("build", () => {
 		expect(js.trim().split("\n")).toHaveLength(1);
 	});
 
-	test("a file used by the server and the CSS is written once", async () => {
+	const css = () => Bun.file(dist("client", built.entries["src/client/main.css"]!.styles[0]!)).text();
+
+	test("a file the server imports is one file, with one URL in the CSS", async () => {
 		const fonts = built.files.filter((file) => file.endsWith(".woff2"));
 		expect(fonts).toHaveLength(1);
 		expect(await Bun.file(dist("client", fonts[0]!)).bytes()).toEqual(font);
-		const css = await Bun.file(dist("client", built.entries["src/client/main.css"]!.styles[0]!)).text();
-		expect(css).toContain("/" + fonts[0]);
+		// not a `data:` URL, which the page would download again with `client.url()`
+		expect(await css()).toContain(`url(/${fonts[0]}?v=1#f)`);
+		expect(await css()).not.toContain("data:font");
+	});
+
+	test("a file only the CSS uses is inlined, as Bun does", async () => {
+		expect(await css()).toContain("url(data:image/png;base64,");
+		expect(built.files.filter((file) => file.endsWith(".png"))).toEqual([]);
 	});
 
 	test("prints each file and the build time", () => {
@@ -364,6 +376,8 @@ describe("build", () => {
 			const url = await app.text("/font");
 			expect(url).toMatch(/^\/_immutable\/font-\w+\.woff2$/);
 			expect(await (await app.get(url)).bytes()).toEqual(font);
+			// the same URL the stylesheet has
+			expect(await app.text(built.entries["src/client/main.css"]!.styles[0]!)).toContain(`url(${url}?v=1#f)`);
 		});
 
 		test("keeps the app's routes, `fetch` and text imports", async () => {
