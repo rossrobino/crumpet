@@ -1,6 +1,6 @@
 // Vercel output with the Build Output API, ported from @domcojs/vercel.
 // https://vercel.com/docs/build-output-api/v3
-import pkg from "../package.json" with { type: "json" };
+import { version } from "../package.json" with { type: "json" };
 // Bun has no recursive copy or delete of its own
 import fs from "node:fs/promises";
 import { isIP } from "node:net";
@@ -225,7 +225,7 @@ export const vercel = async (options: VercelOptions = {}) => {
 		),
 		json("config.json", {
 			version: 3,
-			framework: { slug: "crumpet", version: pkg.version },
+			framework: { slug: "crumpet", version },
 			routes,
 			...(options.images && { images: options.images }),
 		}),

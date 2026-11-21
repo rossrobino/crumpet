@@ -6,6 +6,12 @@
 		"name": "Ross Robino",
 		"url": "https://robino.dev"
 	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/rossrobino/crumpet.git"
+	},
+	"homepage": "https://github.com/rossrobino/crumpet#readme",
+	"bugs": "https://github.com/rossrobino/crumpet/issues",
 	"license": "MIT",
 	"keywords": [
 		"bun",
@@ -14,10 +20,28 @@
 	],
 	"type": "module",
 	"sideEffects": false,
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
 	"exports": {
-		".": "./index.js"
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		}
 	},
 	"files": [
-		"index.js"
-	]
+		"dist",
+		"src",
+		"!src/**/*.test.ts"
+	],
+	"scripts": {
+		"build": "bun build.ts",
+		"check": "bun check",
+		"test": "bun test",
+		"prepublishOnly": "bun run check && bun test && bun run build"
+	},
+	"devDependencies": {
+		"@robino/tsconfig": "^3.0.0",
+		"@types/bun": "^1.4.4",
+		"typescript": "^7.0.2"
+	}
 }

@@ -1,0 +1,10 @@
+{
+	"extends": "@robino/tsconfig/tsc.json",
+	"compilerOptions": {
+		"types": ["bun"],
+		"module": "Preserve",
+		"moduleResolution": "bundler",
+		// the JavaScript is Bun's: see `build.ts`
+		"emitDeclarationOnly": true
+	}
+}

@@ -1,0 +1,12 @@
+{
+	"extends": "@robino/tsconfig/check.json",
+	"compilerOptions": {
+		"types": ["bun"],
+		// resolved the way Bun does, which allows `import { version } from "../package.json"`
+		"module": "Preserve",
+		"moduleResolution": "bundler",
+		// the tests import `./index.ts`
+		"allowImportingTsExtensions": true
+	},
+	"include": ["src", "build.ts"]
+}

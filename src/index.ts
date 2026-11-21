@@ -7,9 +7,9 @@ import path from "node:path";
 // isn't a terminal or NO_COLOR is set, and adds them with FORCE_COLOR
 import { styleText } from "node:util";
 
-import { type VercelOptions, vercel as output } from "./vercel.ts";
+import { type VercelOptions, vercel as output } from "./vercel.js";
 
-export { onVercel, type VercelOptions } from "./vercel.ts";
+export { onVercel, type VercelOptions } from "./vercel.js";
 
 /**
  * The default export of the app's module: `Bun.serve` options, exactly what
