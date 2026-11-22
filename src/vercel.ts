@@ -169,7 +169,7 @@ export const onVercel = (
 			// with ISR the route adds the one `__pathname`; a second came from the client
 			options.isr && new URL(req.url).searchParams.getAll(pathnameParam).length !== 1
 				? new Response(null, { status: 400 })
-				: // called on `app`, as Bun does: a framework's `fetch` can use `this`
+				: // called on `app`, so a framework's `fetch` that uses `this` works
 					fetch.call(app, request(req, options.isr), edge(req, server)),
 	};
 };
@@ -190,29 +190,31 @@ export const vercel = async (options: VercelOptions = {}) => {
 		...options.config,
 	};
 
-	const routes: Route[] = [];
-	if (options.trailingSlash === true) {
-		routes.push(
-			// pages get a slash, files lose it
-			{ src: "^/((?:[^/\\\\]+/)*[^/\\\\.]+)$", headers: { Location: "/$1/" }, status: 308 },
-			{ src: "^/((?:[^/\\\\]+/)*[^/\\\\]+\\.\\w+)/$", headers: { Location: "/$1" }, status: 308 },
-		);
-	} else if (options.trailingSlash === false) {
-		routes.push({ src: "^/((?:[^/\\\\]+/)*[^/\\\\]+)/$", headers: { Location: "/$1" }, status: 308 });
-	}
-	routes.push(
+	// after the files, so a file is never redirected, such as `/.well-known/…` without an extension
+	const slash: Route[] =
+		options.trailingSlash === true
+			? [
+					// pages get a slash, files lose it
+					{ src: "^/((?:[^/\\\\]+/)*[^/\\\\.]+)$", headers: { Location: "/$1/" }, status: 308 },
+					{ src: "^/((?:[^/\\\\]+/)*[^/\\\\]+\\.\\w+)/$", headers: { Location: "/$1" }, status: 308 },
+				]
+			: options.trailingSlash === false
+				? [{ src: "^/((?:[^/\\\\]+/)*[^/\\\\]+)/$", headers: { Location: "/$1" }, status: 308 }]
+				: [];
+	const routes: Route[] = [
 		{
 			src: "/_immutable/.+",
 			headers: { "Cache-Control": "public, immutable, max-age=31536000" },
 		},
 		// static files first
 		{ methods: ["GET"], handle: "filesystem" },
+		...slash,
 		// Everything else goes to the function. Vercel passes it the client's
 		// path and query. ISR caches by the function's own path and `allowQuery`,
 		// so there the client's path has to be in the query, and the function
 		// moves it back.
 		{ src: "^/(.*)$", dest: isr ? `/fn?${pathnameParam}=$1` : "/fn" },
-	);
+	];
 
 	const json = (file: string, value: unknown) =>
 		Bun.write(path.join(out, file), JSON.stringify(value, null, "\t"));

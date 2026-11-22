@@ -293,7 +293,8 @@ describe("build output", () => {
 
 	test("adds a slash with trailingSlash: true", async () => {
 		const { json } = await build({ trailingSlash: true });
-		const [add, remove, ...rest] = (await json("config.json")).routes as Route[];
+		const routes = (await json("config.json")).routes as Route[];
+		const [add, remove] = routes.filter((route) => route.status === 308);
 
 		expect(add).toMatchObject({ status: 308 });
 		expect(redirect(add!, "/about")).toBe("/about/");
@@ -307,12 +308,13 @@ describe("build output", () => {
 		expect(redirect(remove!, "/style.css/")).toBe("/style.css");
 		expect(redirect(remove!, "/about/")).toBeNull();
 
-		expect(rest).toHaveLength(3);
+		expect(routes).toHaveLength(5);
 	});
 
 	test("removes the slash with trailingSlash: false", async () => {
 		const { json } = await build({ trailingSlash: false });
-		const [remove, ...rest] = (await json("config.json")).routes as Route[];
+		const routes = (await json("config.json")).routes as Route[];
+		const [remove] = routes.filter((route) => route.status === 308);
 
 		expect(remove).toMatchObject({ status: 308 });
 		expect(redirect(remove!, "/about/")).toBe("/about");
@@ -320,7 +322,17 @@ describe("build output", () => {
 		expect(redirect(remove!, "/about")).toBeNull();
 		expect(redirect(remove!, "/")).toBeNull();
 
-		expect(rest).toHaveLength(3);
+		expect(routes).toHaveLength(4);
+	});
+
+	test("redirects only paths that aren't files", async () => {
+		for (const trailingSlash of [true, false]) {
+			const routes = (await (await build({ trailingSlash })).json("config.json")).routes as Route[];
+			const files = routes.findIndex((route) => route.handle === "filesystem");
+			// such as `/.well-known/apple-app-site-association`, which has no extension
+			for (const route of routes.slice(0, files)) expect(route.status).toBeUndefined();
+			expect(routes.slice(files).some((route) => route.status === 308)).toBe(true);
+		}
 	});
 
 	test("never redirects to another site", async () => {

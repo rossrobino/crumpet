@@ -90,7 +90,8 @@ export const client = {
 	url(file: string) {
 		if (bundled || !path.isAbsolute(file)) return file;
 		served.add(file);
-		return filePath + path.relative(process.cwd(), file);
+		// the whole path: `../` would be removed from a URL, for a file outside the project
+		return filePath + encode(path.relative("/", file));
 	},
 };
 
@@ -224,13 +225,15 @@ const publicFiles = async (dir?: string) => {
 	return files;
 };
 
-/** `a/b c.txt` to `/a/b%20c.txt`: the path a request has, with `/` on every system. */
-const route = (file: string) =>
-	"/" +
+/** `a/b c.txt` to `a/b%20c.txt`: as a request's path has it, with `/` on every system. */
+const encode = (file: string) =>
 	file
 		.split(path.sep)
 		.map((part) => encodeURI(part).replace(/[#?]/g, encodeURIComponent))
 		.join("/");
+
+/** `a/b c.txt` to `/a/b%20c.txt` */
+const route = (file: string) => "/" + encode(file);
 
 const noCache = { "cache-control": "no-cache" };
 
@@ -285,29 +288,43 @@ export const vercel = async (options?: VercelOptions) => {
  * the same.
  */
 const local = (req: Request, hostname?: string) => {
-	const host = new URL(`http://${req.headers.get("host")}`).hostname.replace(/^\[(.*)\]$/, "$1");
-	return Boolean(isIP(host)) || host === "localhost" || host.endsWith(".localhost") || host === hostname;
+	let host: string;
+	try {
+		// lowercased, without the port, the brackets of an IPv6 address or a final dot
+		host = new URL(`http://${req.headers.get("host")}`).hostname.replace(/^\[(.*)\]$/, "$1").replace(/\.$/, "");
+	} catch {
+		return false; // not a host at all
+	}
+	return (
+		Boolean(isIP(host)) || host === "localhost" || host.endsWith(".localhost") || host === hostname?.toLowerCase()
+	);
 };
 
-type Handler = (req: Request, server: Server<unknown>) => unknown;
+type Handler = (this: unknown, req: Request, server: Server<unknown>) => unknown;
 
 /** A route or `fetch` that answers 403 to a request that doesn't name this machine. */
-const guard = (handler: Handler, hostname?: string): Handler => (req, server) =>
-	local(req, hostname)
-		? handler(req, server)
-		: new Response("crumpet: the dev server only answers localhost, an IP address or the app's hostname.", {
-				status: 403,
-			});
+const guard = (handler: Handler, hostname?: string): Handler =>
+	// Bun calls a handler with the server as `this`
+	function (req, server) {
+		return local(req, hostname)
+			? handler.call(this, req, server)
+			: new Response("crumpet: the dev server only answers localhost, an IP address or the app's hostname.", {
+					status: 403,
+				});
+	};
 
-/** `guard()` on a Bun route: a static response, a handler, or handlers by method. */
+/** `guard()` on a Bun route: a static response, a file, a handler, or handlers by method. */
 const guardRoute = (value: unknown, hostname?: string): unknown =>
 	value instanceof Response
 		? guard(() => value.clone(), hostname)
-		: typeof value === "function"
-			? guard(value as Handler, hostname)
-			: value && typeof value === "object" && Object.keys(value).every((key) => /^[A-Z]+$/.test(key))
-				? Object.fromEntries(Object.entries(value).map(([method, v]) => [method, guardRoute(v, hostname)]))
-				: value;
+		: value instanceof Blob
+			? guard(() => new Response(value), hostname)
+			: typeof value === "function"
+				? guard(value as Handler, hostname)
+				: value && Object.getPrototypeOf(value) === Object.prototype
+					? Object.fromEntries(Object.entries(value).map(([method, v]) => [method, guardRoute(v, hostname)]))
+					: // `false`, or an HTML import, which Bun serves itself
+						value;
 
 /** Serves the app with a client build in memory. */
 const dev = async (options: BuildOptions) => {
@@ -351,7 +368,7 @@ const dev = async (options: BuildOptions) => {
 		[filePath + "*"]: (req: Request) => {
 			let file: string;
 			try {
-				file = path.resolve(decodeURIComponent(new URL(req.url).pathname.slice(filePath.length)));
+				file = path.resolve("/", decodeURIComponent(new URL(req.url).pathname.slice(filePath.length)));
 			} catch {
 				// a malformed `%`, which would show Bun's error page
 				return new Response(null, { status: 400 });

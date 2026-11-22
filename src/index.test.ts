@@ -29,7 +29,13 @@ import font from "../client/font.woff2";
 import note from "./note.md" with { type: "text" };
 
 export default {
-	routes: { "/own": new Response("own route"), "/clash": new Response("the app's route") },
+	routes: {
+		"/own": new Response("own route"),
+		"/clash": new Response("the app's route"),
+		// this module, which is there in dev and in the build
+		"/file": Bun.file(import.meta.path),
+		"/method": { GET: new Response("a GET") },
+	},
 	fetch(req: Request, server: Bun.Server<undefined>) {
 		const url = new URL(req.url);
 		if (url.pathname === "/head") {
@@ -43,6 +49,7 @@ export default {
 		if (url.pathname === "/note") return new Response(note);
 		if (url.pathname === "/robots.txt") return new Response("the app's robots.txt");
 		if (url.pathname === "/development") return new Response(String(server.development));
+		if (url.pathname === "/this") return new Response(String((this as unknown) === server));
 		if (url.pathname === "/ws") return server.upgrade(req) ? undefined : new Response(null, { status: 400 });
 		return new Response("not found", { status: 404 });
 	},
@@ -425,6 +432,8 @@ describe("build", () => {
 
 		test("keeps the app's routes, `fetch` and text imports", async () => {
 			expect(await app.text("/own")).toBe("own route");
+			expect(await app.text("/file")).toContain("own route");
+			expect(await app.text("/method")).toBe("a GET");
 			expect(await app.text("/note")).toBe("# a note\n");
 			expect((await app.get("/nothing")).status).toBe(404);
 		});
@@ -519,7 +528,7 @@ describe("development", () => {
 
 	test("`client.url()` is a dev route for the file", async () => {
 		const url = await app.text("/font");
-		expect(url).toBe("/_crumpet/file/src/client/font.woff2");
+		expect(url).toBe("/_crumpet/file" + path.join(dir, "src/client/font.woff2"));
 		const res = await app.get(url);
 		expect(res.headers.get("cache-control")).toBe("no-cache");
 		expect(await res.bytes()).toEqual(font);
@@ -534,6 +543,9 @@ describe("development", () => {
 			"src/client/../client/a.ts",
 			"..%2F..%2Fetc%2Fhosts",
 			"%2Fetc%2Fhosts",
+			"etc/hosts",
+			dir.slice(1) + "/build.ts",
+			dir.slice(1) + "/src/client/../server/app.ts",
 		]) {
 			expect((await app.get("/_crumpet/file/" + file)).status).toBe(404);
 		}
@@ -541,8 +553,14 @@ describe("development", () => {
 
 	test("keeps the app's routes, `fetch` and text imports", async () => {
 		expect(await app.text("/own")).toBe("own route");
+		expect(await app.text("/file")).toContain("own route");
+		expect(await app.text("/method")).toBe("a GET");
 		expect(await app.text("/note")).toBe("# a note\n");
 		expect((await app.get("/nothing")).status).toBe(404);
+	});
+
+	test("calls the app's `fetch` with the server as `this`, as Bun does", async () => {
+		expect(await app.text("/this")).toBe("true");
 	});
 
 	test("keeps the app's WebSocket handler next to the reload socket", async () => {
@@ -592,7 +610,7 @@ describe("development", () => {
 		const status = async (host: string, pathname: string) =>
 			(await fetch(app.origin + pathname, { headers: { host } })).status;
 		const port = new URL(app.origin).port;
-		for (const pathname of ["/own", "/note", "/robots.txt", "/_crumpet/file/src/client/font.woff2"]) {
+		for (const pathname of ["/own", "/file", "/method", "/note", "/robots.txt", await app.text("/font")]) {
 			expect(await status(`evil.example:${port}`, pathname)).toBe(403);
 			expect(await status(`localhost:${port}`, pathname)).toBe(200);
 			expect(await status(`127.0.0.1:${port}`, pathname)).toBe(200);
@@ -628,6 +646,19 @@ describe("development", () => {
 		expect(await app.text(styles(html)[0]!)).toContain("#639");
 	});
 
+	test("serves a font from outside the project", async () => {
+		// as in a monorepo, where packages such as @fontsource are in the root's node_modules
+		const outside = `${dir}-outside.woff2`;
+		temp.push(outside);
+		await Bun.write(outside, font);
+		await reloaded(() =>
+			write("src/client/a.css", `@font-face { font-family: "o"; src: url("../../../${path.basename(outside)}"); }\n`),
+		);
+		const css = await app.text(styles(await app.text("/head?e=src/client/a.ts"))[0]!);
+		const url = css.match(/url\("?([^")]+)/)![1]!;
+		expect(await (await app.get(url)).bytes()).toEqual(font);
+	});
+
 	test("keeps serving the last build when the client doesn't build", async () => {
 		const before = await app.text("/head?e=src/client/a.ts");
 		await reloaded(() => write("src/client/a.ts", "const = ;"));
@@ -648,7 +679,7 @@ describe("development", () => {
 		// pages reload by opening the socket again
 		const again = await until(() => socket(app.origin + "/_crumpet/reload").catch(() => undefined));
 		again.ws.close();
-		expect(await app.text("/font")).toBe("/_crumpet/file/src/client/font.woff2");
+		expect(await app.text("/font")).toBe("/_crumpet/file" + path.join(dir, "src/client/font.woff2"));
 	});
 
 	test("listens on localhost and prints the address", async () => {
