@@ -101,6 +101,12 @@ describe("function", () => {
 		).toBe("https://app.vercel.app/");
 	});
 
+	test("with ISR, a second __pathname from the client is a 400", async () => {
+		const wrapped = onVercel(urlApp, { isr: true }) as { fetch(req: Request): Response };
+		const res = wrapped.fetch(new Request("https://app.vercel.app/fn?__pathname=a&__pathname=admin"));
+		expect(res.status).toBe(400);
+	});
+
 	test("keeps the method, headers and body", async () => {
 		const app = {
 			fetch: async (req: Request) =>
@@ -315,6 +321,19 @@ describe("build output", () => {
 		expect(redirect(remove!, "/")).toBeNull();
 
 		expect(rest).toHaveLength(3);
+	});
+
+	test("never redirects to another site", async () => {
+		const routes = [
+			...((await (await build({ trailingSlash: true })).json("config.json")).routes as Route[]),
+			...((await (await build({ trailingSlash: false })).json("config.json")).routes as Route[]),
+		].filter((route) => route.status === 308);
+		// `//evil.com` and `/\evil.com` are another site to a browser
+		for (const route of routes)
+			for (const attack of ["//evil.com/", "/\\evil.com/", "//evil.com", "/\\evil.com", "//evil.com/a.css/"]) {
+				const location = redirect(route, attack);
+				if (location) expect(new URL(location, "https://app.example").host).toBe("app.example");
+			}
 	});
 
 	test("adds no redirects without trailingSlash", async () => {

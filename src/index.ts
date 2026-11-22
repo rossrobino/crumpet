@@ -2,8 +2,9 @@
 import type { BuildConfig, BuildOutput, BunPlugin, Server } from "bun";
 // a plugin's `onResolve` can't wait for a promise
 import { existsSync, readFileSync } from "node:fs";
-// Bun has no file watcher, recursive delete or rename of its own, and `path` is plain string work
+// Bun has no file watcher or recursive delete of its own, and `path` is plain string work
 import fs from "node:fs/promises";
+import { isIP } from "node:net";
 import path from "node:path";
 // Bun implements Node's styleText, which leaves colors out when the output
 // isn't a terminal or NO_COLOR is set, and adds them with FORCE_COLOR
@@ -47,9 +48,6 @@ const built: Built | undefined = bundled
 
 let manifest: Manifest = built?.entries ?? {};
 
-/** `client.head()` results, by entry list. Cleared when the manifest changes. */
-const heads = new Map<string, string>();
-
 /** Set by the dev server: the script that reloads pages, added by `client.head()`. */
 let devScript = "";
 
@@ -59,16 +57,15 @@ const filePath = "/_crumpet/file/";
 /** Files `client.url()` has returned in dev: the only ones the dev server sends. */
 const served = new Set<string>();
 
+/** The client build's tags and file URLs, for the HTML the server renders. */
 export const client = {
 	/**
 	 * @param entries client entry points as passed to `build()`, all of them by default
-	 * @returns the stylesheet, modulepreload and module script tags they need
+	 * @returns their stylesheet tags, then modulepreloads, then module scripts, each
+	 * once, and the reload script in dev
+	 * @throws if an entry isn't a client entry point
 	 */
 	head(...entries: string[]) {
-		const key = entries.join("\n");
-		let html = heads.get(key);
-		if (html !== undefined) return html;
-
 		// every entry's stylesheets, then preloads, then scripts, each once
 		const tags = { styles: new Set<string>(), preloads: new Set<string>(), scripts: new Set<string>() };
 		for (const name of entries.length ? entries : Object.keys(manifest)) {
@@ -78,13 +75,12 @@ export const client = {
 			for (const kind of ["styles", "preloads", "scripts"] as const)
 				for (const url of entry[kind]) tags[kind].add(url);
 		}
-		html =
+		return (
 			[...tags.styles].map((url) => `<link rel="stylesheet" href="${url}">`).join("") +
 			[...tags.preloads].map((url) => `<link rel="modulepreload" href="${url}">`).join("") +
 			[...tags.scripts].map((url) => `<script type="module" src="${url}"></script>`).join("") +
-			devScript;
-		heads.set(key, html);
-		return html;
+			devScript
+		);
 	},
 
 	/**
@@ -151,21 +147,12 @@ const url = (file: string) => "/" + file.replace(/^\.?\//, "");
 /** Reads which output files each entry point needs from Bun's metafile. */
 const toManifest = (result: BuildOutput): Manifest => {
 	const outputs = new Map(
-		Object.entries(
-			result.metafile!.outputs as Record<
-				string,
-				{
-					entryPoint?: string;
-					cssBundle?: string;
-					imports?: { path: string; kind: string }[];
-				}
-			>,
-		).map(([file, out]) => [url(file), out]),
+		Object.entries(result.metafile!.outputs).map(([file, out]) => [url(file), out]),
 	);
 
 	/** Chunks an output imports statically, all the way down. */
 	const chunks = (file: string, found = new Set<string>()) => {
-		for (const i of outputs.get(file)?.imports ?? []) {
+		for (const i of outputs.get(file)!.imports) {
 			const chunk = url(i.path);
 			if (i.kind === "import-statement" && outputs.has(chunk) && !found.has(chunk)) {
 				found.add(chunk);
@@ -200,7 +187,8 @@ export type BuildOptions = {
 	 * - `true`: serves the app with the client built in memory and reloads
 	 *   pages on changes. Run under `bun --watch`, which restarts it when server
 	 *   code changes.
-	 * - `false`: writes `dist/` and exits.
+	 * - `false`: writes `dist/`. Steps after `build()`, such as `vercel()`, run on
+	 *   that build.
 	 *
 	 * @default false
 	 */
@@ -229,11 +217,28 @@ const publicFiles = async (dir?: string) => {
 	if (!dir) return [];
 	if (!(await fs.stat(dir).catch(() => undefined))?.isDirectory())
 		throw new Error(`crumpet: the public folder "${dir}" doesn't exist.`);
-	return Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: dir, dot: true }));
+	const files = await Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: dir, dot: true }));
+	// Bun reads them in a route as a parameter and a wildcard
+	const pattern = files.find((file) => /[:*]/.test(file));
+	if (pattern) throw new Error(`crumpet: the public file "${pattern}" can't be served: its name has ":" or "*".`);
+	return files;
 };
 
-/** `a/b.txt` to `/a/b.txt`, with `/` on every system. */
-const route = (file: string) => "/" + file.split(path.sep).join("/");
+/** `a/b c.txt` to `/a/b%20c.txt`: the path a request has, with `/` on every system. */
+const route = (file: string) =>
+	"/" +
+	file
+		.split(path.sep)
+		.map((part) => encodeURI(part).replace(/[#?]/g, encodeURIComponent))
+		.join("/");
+
+const noCache = { "cache-control": "no-cache" };
+
+/** Each of `files` at its path in `dir`, as a Bun file route. */
+const fileRoutes = (dir: string, files: string[], headers: (file: string) => HeadersInit) =>
+	Object.fromEntries(
+		files.map((file) => [route(file), new Response(Bun.file(path.join(dir, file)), { headers: headers(file) })]),
+	);
 
 /**
  * Serves the app in development, or builds it. Called from the app's
@@ -273,6 +278,37 @@ export const vercel = async (options?: VercelOptions) => {
 	if (!development) await output(options);
 };
 
+/**
+ * Whether a request names this machine: an IP address, `localhost` or the
+ * app's `hostname`. Otherwise a site whose domain points at 127.0.0.1 (DNS
+ * rebinding) would be the dev server's origin and could read it. Vite checks
+ * the same.
+ */
+const local = (req: Request, hostname?: string) => {
+	const host = new URL(`http://${req.headers.get("host")}`).hostname.replace(/^\[(.*)\]$/, "$1");
+	return Boolean(isIP(host)) || host === "localhost" || host.endsWith(".localhost") || host === hostname;
+};
+
+type Handler = (req: Request, server: Server<unknown>) => unknown;
+
+/** A route or `fetch` that answers 403 to a request that doesn't name this machine. */
+const guard = (handler: Handler, hostname?: string): Handler => (req, server) =>
+	local(req, hostname)
+		? handler(req, server)
+		: new Response("crumpet: the dev server only answers localhost, an IP address or the app's hostname.", {
+				status: 403,
+			});
+
+/** `guard()` on a Bun route: a static response, a handler, or handlers by method. */
+const guardRoute = (value: unknown, hostname?: string): unknown =>
+	value instanceof Response
+		? guard(() => value.clone(), hostname)
+		: typeof value === "function"
+			? guard(value as Handler, hostname)
+			: value && typeof value === "object" && Object.keys(value).every((key) => /^[A-Z]+$/.test(key))
+				? Object.fromEntries(Object.entries(value).map(([method, v]) => [method, guardRoute(v, hostname)]))
+				: value;
+
 /** Serves the app with a client build in memory. */
 const dev = async (options: BuildOptions) => {
 	const start = performance.now();
@@ -304,15 +340,24 @@ const dev = async (options: BuildOptions) => {
 	const reload = {};
 
 	const fixed = {
+		// only from the dev server's own pages: a WebSocket isn't held to the same origin
 		[reloadPath]: (req: Request, server: Server<unknown>) =>
-			server.upgrade(req, { data: reload }) ? undefined : new Response(null, { status: 400 }),
+			req.headers.get("origin")?.replace(/^\w+:\/\//, "") !== req.headers.get("host")
+				? new Response(null, { status: 403 })
+				: server.upgrade(req, { data: reload })
+					? undefined
+					: new Response(null, { status: 400 }),
 		// only files `client.url()` has returned, never the rest of the project
 		[filePath + "*"]: (req: Request) => {
-			const file = path.resolve(
-				decodeURIComponent(new URL(req.url).pathname.slice(filePath.length)),
-			);
+			let file: string;
+			try {
+				file = path.resolve(decodeURIComponent(new URL(req.url).pathname.slice(filePath.length)));
+			} catch {
+				// a malformed `%`, which would show Bun's error page
+				return new Response(null, { status: 400 });
+			}
 			return served.has(file)
-				? new Response(Bun.file(file), { headers: { "cache-control": "no-cache" } })
+				? new Response(Bun.file(file), { headers: noCache })
 				: new Response(null, { status: 404 });
 		},
 	};
@@ -321,18 +366,10 @@ const dev = async (options: BuildOptions) => {
 	// see them. The entry points' folders are watched with their subfolders, and
 	// so is the folder of every other file a build read, wherever it is.
 	const publicDir = options.public && path.resolve(options.public);
-	const roots = [
-		...new Set([...config.entrypoints.map((e) => path.resolve(path.dirname(e))), ...(publicDir ? [publicDir] : [])]),
-	];
+	const roots = [...config.entrypoints.map((e) => path.resolve(path.dirname(e))), ...(publicDir ? [publicDir] : [])];
 
-	/** The public folder's files, read from disk on each request, so edits show. */
-	const publicRoutes = async () =>
-		Object.fromEntries(
-			(await publicFiles(publicDir)).map((file) => [
-				route(file),
-				() => new Response(Bun.file(path.join(publicDir!, file)), { headers: { "cache-control": "no-cache" } }),
-			]),
-		);
+	/** The public folder's files; Bun reads a file route from disk on each request, so edits show. */
+	const publicRoutes = async () => fileRoutes(publicDir!, await publicFiles(publicDir), () => noCache);
 	let pub = await publicRoutes();
 	const watched = new Set<string>();
 	const watch = (dir: string, recursive = false) => {
@@ -351,13 +388,9 @@ const dev = async (options: BuildOptions) => {
 	/** The client build as routes, served from memory without caching. */
 	const clientRoutes = (result: BuildOutput) => {
 		manifest = toManifest(result);
-		heads.clear();
 		for (const input in result.metafile!.inputs) watch(path.resolve(path.dirname(input)));
 		return Object.fromEntries(
-			result.outputs.map((o) => [
-				url(o.path),
-				new Response(o, { headers: { "cache-control": "no-cache" } }),
-			]),
+			result.outputs.map((o) => [url(o.path), new Response(o, { headers: noCache })]),
 		);
 	};
 
@@ -372,19 +405,25 @@ const dev = async (options: BuildOptions) => {
 		drain: (ws) => (ws.data === reload ? undefined : theirs?.drain?.(ws)),
 	};
 
-	// files first, then the app, as in production and on Vercel
-	const routes = (client: Record<string, Response>) => ({ ...appRoutes(app), ...pub, ...fixed, ...client });
+	const serve = (client: Record<string, Response>) =>
+		({
+			...app,
+			development: true,
+			...(app.fetch && { fetch: guard(app.fetch as Handler, app.hostname) }),
+			routes: Object.fromEntries(
+				// files first, then the app, as in production and on Vercel
+				Object.entries({ ...appRoutes(app), ...pub, ...fixed, ...client }).map(([key, value]) => [
+					key,
+					guardRoute(value, app.hostname),
+				]),
+			),
+			websocket,
+		}) as App;
 
 	if (!first.success) console.error(first.logs);
 	for (const root of roots) watch(root, true);
-	const server = Bun.serve({
-		// not the whole network, unless the app says so
-		hostname: "localhost",
-		...app,
-		development: true,
-		routes: routes(first.success ? clientRoutes(first) : {}),
-		websocket,
-	} as App);
+	// not the whole network, unless the app says so
+	const server = Bun.serve({ hostname: "localhost", ...serve(first.success ? clientRoutes(first) : {}) } as App);
 
 	// One save can send several events, and a change can come in during a
 	// rebuild: wait briefly, run one rebuild at a time, then one more if
@@ -401,22 +440,22 @@ const dev = async (options: BuildOptions) => {
 		// a save is often two events (write, then rename); wait for the rest of it
 		await Bun.sleep(10);
 		let ok = false;
-		do {
-			again = false;
-			// a file added to or removed from the public folder
-			pub = await publicRoutes();
-			const result = await Bun.build(config);
-			ok = result.success;
-			if (!ok) console.error(result.logs);
-			else
-				server.reload({
-					...app,
-					development: true,
-					routes: routes(clientRoutes(result)),
-					websocket,
-				} as App);
-		} while (again);
-		building = false;
+		try {
+			do {
+				again = false;
+				// a file added to or removed from the public folder
+				pub = await publicRoutes();
+				const result = await Bun.build(config);
+				ok = result.success;
+				if (!ok) console.error(result.logs);
+				else server.reload(serve(clientRoutes(result)));
+			} while (again);
+		} catch (error) {
+			// such as the public folder being removed: the next change tries again
+			console.error(error);
+		} finally {
+			building = false;
+		}
 		if (ok) {
 			console.log(styleText("dim", `client rebuilt in ${Math.round(performance.now() - started)} ms`));
 		}
@@ -444,15 +483,8 @@ export const production = (app: App) => {
 		// files first, then the app, as on Vercel, whose CDN serves them before the function
 		routes: {
 			...appRoutes(app),
-			...Object.fromEntries(
-				built!.files.map((file) => [
-					route(file),
-					new Response(Bun.file(path.join(dir, file)), {
-						headers: file.startsWith("_immutable/")
-							? { "cache-control": "public, immutable, max-age=31536000" }
-							: {},
-					}),
-				]),
+			...fileRoutes(dir, built!.files, (file): HeadersInit =>
+				file.startsWith("_immutable/") ? { "cache-control": "public, immutable, max-age=31536000" } : {},
 			),
 		},
 	} as App;
@@ -520,13 +552,17 @@ export const vercel = (options) => onVercel(app, options);
 		}),
 		options.public && fs.cp(options.public, "dist/client", { recursive: true }),
 	]);
-	const client = path.resolve("dist/client");
 	// a CSS entry point also writes an empty JavaScript file
 	const empty = clientResult.outputs.filter((o) => o.size === 0);
-	const files = [...clientResult.outputs, ...serverResult.outputs]
-		.filter((o) => o.size > 0 && o.path.startsWith(client + path.sep))
-		.map((o) => path.relative(client, o.path))
-		.concat(pub, [...fontFiles.values()]);
+	// every file written, relative to the project
+	const written = [...clientResult.outputs, ...serverResult.outputs]
+		.filter((o) => o.size > 0)
+		.map((o) => path.relative(process.cwd(), o.path))
+		.concat([...fontFiles.values()].map((out) => path.join("dist/client", out)));
+	const files = written
+		.filter((file) => file.startsWith("dist/client" + path.sep))
+		.map((file) => path.relative("dist/client", file))
+		.concat(pub);
 
 	await Promise.all([
 		...[...fontFiles].map(([file, out]) => Bun.write(path.join("dist/client", out), Bun.file(file))),
@@ -540,14 +576,7 @@ export const vercel = (options) => onVercel(app, options);
 		),
 	]);
 
-	const ms = performance.now() - start;
-	await report(
-		[...new Set([...clientResult.outputs, ...serverResult.outputs])]
-			.filter((o) => o.size > 0)
-			.map((o) => path.relative(process.cwd(), o.path))
-			.concat([...fontFiles.values()].map((out) => path.join("dist/client", out))),
-		ms,
-	);
+	await report([...new Set(written)], performance.now() - start);
 };
 
 const kB = (bytes: number) => `${(bytes / 1000).toFixed(2)} kB`;

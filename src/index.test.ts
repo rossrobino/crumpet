@@ -59,6 +59,7 @@ export default {
 	"public/.well-known/client.json": `{"client_id":"https://example.com/.well-known/client.json"}`,
 	// the app's route has the same path
 	"public/clash": "from the public folder",
+	"public/a file 100%.txt": "spaces and a percent sign",
 	"src/client/a.ts": `import { shared } from "../lib/shared.ts";
 import "./a.css";
 
@@ -144,13 +145,17 @@ const serve = async (cmd: string[], cwd: string, env: Record<string, string> = {
 	return { proc, origin, get, text: async (pathname: string) => (await get(pathname)).text() };
 };
 
-const publicFiles = [".well-known/client.json", "clash", "icons/favicon.svg", "robots.txt"];
+const publicFiles = [".well-known/client.json", "a file 100%.txt", "clash", "icons/favicon.svg", "robots.txt"];
+/** A public file's URL. */
+const at = (file: string) => "/" + file.split("/").map(encodeURIComponent).join("/");
 const hashed = (files: string[]) => files.filter((file) => !publicFiles.includes(file));
 
 /** A WebSocket and the messages it has received. */
 const socket = async (url: string) => {
 	const messages: string[] = [];
-	const ws = new WebSocket(url.replace("http", "ws"));
+	// as a browser does: the reload socket only takes the dev server's own pages
+	// Bun's WebSocket takes headers, which the DOM types don't declare
+	const ws = new WebSocket(url.replace("http", "ws"), { headers: { origin: new URL(url).origin } } as never);
 	ws.onmessage = (e) => messages.push(String(e.data));
 	await new Promise((resolve, reject) => {
 		ws.onopen = resolve;
@@ -325,6 +330,13 @@ describe("build", () => {
 		expect(await fs.exists(path.join(broken, "dist/server/manifest.json"))).toBe(false);
 	});
 
+	test("fails for a public file with a route pattern in its name", async () => {
+		const broken = await fixture({ "public/:id": "x" });
+		const { code, stderr } = await run(["bun", "build.ts"], broken);
+		expect(code).not.toBe(0);
+		expect(stderr).toContain(`the public file ":id" can't be served`);
+	});
+
 	describe("production server", () => {
 		let app: Awaited<ReturnType<typeof serve>>;
 
@@ -344,7 +356,7 @@ describe("build", () => {
 
 		test("serves public files at their path, not as immutable", async () => {
 			for (const file of publicFiles) {
-				const res = await app.get("/" + file);
+				const res = await app.get(at(file));
 				expect(res.status).toBe(200);
 				expect(res.headers.get("cache-control")).toBeNull();
 				expect(await res.text()).toBe(files["public/" + file] as string);
@@ -548,7 +560,7 @@ describe("development", () => {
 
 	test("serves public files at their path, uncached", async () => {
 		for (const file of publicFiles) {
-			const res = await app.get("/" + file);
+			const res = await app.get(at(file));
 			expect(res.status).toBe(200);
 			expect(res.headers.get("cache-control")).toBe("no-cache");
 			expect(await res.text()).toBe(files["public/" + file] as string);
@@ -565,7 +577,32 @@ describe("development", () => {
 	});
 
 	test("a request that isn't a WebSocket gets a 400 from the reload route", async () => {
-		expect((await app.get("/_crumpet/reload")).status).toBe(400);
+		const res = await fetch(app.origin + "/_crumpet/reload", { headers: { origin: app.origin } });
+		expect(res.status).toBe(400);
+	});
+
+	test("the reload socket refuses another site and a request without an origin", async () => {
+		const status = async (headers: Record<string, string>) =>
+			(await fetch(app.origin + "/_crumpet/reload", { headers })).status;
+		expect(await status({ origin: "https://evil.example" })).toBe(403);
+		expect(await status({})).toBe(403);
+	});
+
+	test("answers only requests that name this machine (DNS rebinding)", async () => {
+		const status = async (host: string, pathname: string) =>
+			(await fetch(app.origin + pathname, { headers: { host } })).status;
+		const port = new URL(app.origin).port;
+		for (const pathname of ["/own", "/note", "/robots.txt", "/_crumpet/file/src/client/font.woff2"]) {
+			expect(await status(`evil.example:${port}`, pathname)).toBe(403);
+			expect(await status(`localhost:${port}`, pathname)).toBe(200);
+			expect(await status(`127.0.0.1:${port}`, pathname)).toBe(200);
+			expect(await status(`[::1]:${port}`, pathname)).toBe(200);
+			expect(await status(`app.localhost:${port}`, pathname)).toBe(200);
+		}
+	});
+
+	test("a malformed escape in a file URL is a 400, not an error page", async () => {
+		expect((await app.get("/_crumpet/file/%E0%A4%A")).status).toBe(400);
 	});
 
 	test("rebuilds and reloads when a client file changes", async () => {

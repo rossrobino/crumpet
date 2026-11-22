@@ -6,7 +6,7 @@ const development = process.execArgv.includes("--watch");
 
 if (!development) {
 	// extra build steps go here, for example (with `$` from "bun"):
-	// await $`tailwindcss -i src/styles/input.css -o src/client/main.css`;
+	// await $`bun run generate`;
 }
 
 await build({

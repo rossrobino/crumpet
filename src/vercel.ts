@@ -166,8 +166,11 @@ export const onVercel = (
 	return {
 		...app,
 		fetch: (req: Request, server?: object) =>
-			// called on `app`, as Bun does: a framework's `fetch` can use `this`
-			fetch.call(app, request(req, options.isr), edge(req, server)),
+			// with ISR the route adds the one `__pathname`; a second came from the client
+			options.isr && new URL(req.url).searchParams.getAll(pathnameParam).length !== 1
+				? new Response(null, { status: 400 })
+				: // called on `app`, as Bun does: a framework's `fetch` can use `this`
+					fetch.call(app, request(req, options.isr), edge(req, server)),
 	};
 };
 
@@ -191,11 +194,11 @@ export const vercel = async (options: VercelOptions = {}) => {
 	if (options.trailingSlash === true) {
 		routes.push(
 			// pages get a slash, files lose it
-			{ src: "^/((?:[^/]+/)*[^/\\.]+)$", headers: { Location: "/$1/" }, status: 308 },
-			{ src: "^/((?:[^/]+/)*[^/]+\\.\\w+)/$", headers: { Location: "/$1" }, status: 308 },
+			{ src: "^/((?:[^/\\\\]+/)*[^/\\\\.]+)$", headers: { Location: "/$1/" }, status: 308 },
+			{ src: "^/((?:[^/\\\\]+/)*[^/\\\\]+\\.\\w+)/$", headers: { Location: "/$1" }, status: 308 },
 		);
 	} else if (options.trailingSlash === false) {
-		routes.push({ src: "^/(.*)\\/$", headers: { Location: "/$1" }, status: 308 });
+		routes.push({ src: "^/((?:[^/\\\\]+/)*[^/\\\\]+)/$", headers: { Location: "/$1" }, status: 308 });
 	}
 	routes.push(
 		{
