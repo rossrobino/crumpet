@@ -19,5 +19,5 @@ await build({
 	},
 });
 
-// on Vercel, also write its build output from `dist/`
+// after a build, also write Vercel's output from `dist/` (not in development)
 await vercel();
