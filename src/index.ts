@@ -178,7 +178,25 @@ export type BuildOptions = {
 	 * sets `outdir`, `naming`, `publicPath`, `splitting` and `metafile` itself.
 	 */
 	client: BuildConfig;
+	/**
+	 * A folder whose files are served as they are, at their path in it:
+	 * `"public"` serves `public/favicon.svg` at `/favicon.svg`. For files that
+	 * need a fixed address. The build copies them into `dist/client/`, and
+	 * they aren't cached as immutable. The app's own routes come first.
+	 */
+	public?: string;
 };
+
+/** The files in the public folder, relative to it, dotfiles too. */
+const publicFiles = async (dir?: string) => {
+	if (!dir) return [];
+	if (!(await fs.stat(dir).catch(() => undefined))?.isDirectory())
+		throw new Error(`crumpet: the public folder "${dir}" doesn't exist.`);
+	return Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: dir, dot: true }));
+};
+
+/** `a/b.txt` to `/a/b.txt`, with `/` on every system. */
+const route = (file: string) => "/" + file.split(path.sep).join("/");
 
 /**
  * Serves the app in development, or builds it. Called from the app's
@@ -260,7 +278,20 @@ const dev = async (options: BuildOptions) => {
 	// Client files aren't in the server's module graph, so `bun --watch` doesn't
 	// see them. The entry points' folders are watched with their subfolders, and
 	// so is the folder of every other file a build read, wherever it is.
-	const roots = [...new Set(config.entrypoints.map((e) => path.resolve(path.dirname(e))))];
+	const publicDir = options.public && path.resolve(options.public);
+	const roots = [
+		...new Set([...config.entrypoints.map((e) => path.resolve(path.dirname(e))), ...(publicDir ? [publicDir] : [])]),
+	];
+
+	/** The public folder's files, read from disk on each request, so edits show. */
+	const publicRoutes = async () =>
+		Object.fromEntries(
+			(await publicFiles(publicDir)).map((file) => [
+				route(file),
+				() => new Response(Bun.file(path.join(publicDir!, file)), { headers: { "cache-control": "no-cache" } }),
+			]),
+		);
+	let pub = await publicRoutes();
 	const watched = new Set<string>();
 	const watch = (dir: string, recursive = false) => {
 		if (
@@ -299,7 +330,7 @@ const dev = async (options: BuildOptions) => {
 		drain: (ws) => (ws.data === reload ? undefined : theirs?.drain?.(ws)),
 	};
 
-	const routes = (client: Record<string, Response>) => ({ ...fixed, ...client, ...appRoutes(app) });
+	const routes = (client: Record<string, Response>) => ({ ...pub, ...fixed, ...client, ...appRoutes(app) });
 
 	if (!first.success) console.error(first.logs);
 	for (const root of roots) watch(root, true);
@@ -329,6 +360,8 @@ const dev = async (options: BuildOptions) => {
 		let ok = false;
 		do {
 			again = false;
+			// a file added to or removed from the public folder
+			pub = await publicRoutes();
 			const result = await Bun.build(config);
 			ok = result.success;
 			if (!ok) console.error(result.logs);
@@ -368,7 +401,7 @@ export const production = (app: App) => {
 		routes: {
 			...Object.fromEntries(
 				built!.files.map((file) => [
-					"/" + file,
+					route(file),
 					new Response(Bun.file(path.join(dir, file)), {
 						headers: file.startsWith("_immutable/")
 							? { "cache-control": "public, immutable, max-age=31536000" }
@@ -392,6 +425,7 @@ const bundle = async (options: BuildOptions) => {
 
 	// only exists in memory, through `Bun.build`'s `files`
 	const entry = path.resolve(".crumpet-entry.ts");
+	const pub = await publicFiles(options.public);
 	const [clientResult, serverResult] = await Promise.all([
 		Bun.build({
 			minify: true,
@@ -424,13 +458,15 @@ export const vercel = (options) => onVercel(app, options);
 			// folds `bundled` and drops dev-only code; names and lines stay readable
 			minify: { syntax: true },
 		}),
+		options.public && fs.cp(options.public, "dist/client", { recursive: true }),
 	]);
 	const client = path.resolve("dist/client");
 	// a CSS entry point also writes an empty JavaScript file
 	const empty = clientResult.outputs.filter((o) => o.size === 0);
 	const files = [...clientResult.outputs, ...serverResult.outputs]
 		.filter((o) => o.size > 0 && o.path.startsWith(client + path.sep))
-		.map((o) => path.relative(client, o.path));
+		.map((o) => path.relative(client, o.path))
+		.concat(pub);
 
 	await Promise.all([
 		...empty.map((o) => Bun.file(o.path).delete()),

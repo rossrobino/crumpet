@@ -76,6 +76,7 @@ export default {
 - `development`: `true` serves the app with the client built in memory and reloads pages on changes. `false`, the default, writes `dist/`.
 - `server`: the app's module.
 - `client`: `Bun.build` options for the client, so `plugins` and `define` apply in dev and in the build. crumpet sets `outdir`, `naming`, `publicPath`, `splitting` and `metafile`.
+- `public`: a folder whose files are served as they are at their path in it, for files that need a fixed address, such as `/favicon.ico`, `/robots.txt` or `/.well-known/…`. `public: "public"` serves `public/robots.txt` at `/robots.txt`. There's no default: without it, no folder is served. The app's own routes come first.
 
 In development the server runs unbundled, `bun --watch` restarts it when server code changes, and crumpet rebuilds the client when client files change. The dev server listens on `localhost` unless the app sets `hostname`.
 
@@ -84,11 +85,12 @@ A build writes:
 ```txt
 dist/
   client/_immutable/   hashed scripts, styles and files
+  client/              the public folder's files, as they are
   server/app.js        the app, bundled
   server/manifest.json which files each entry point needs
 ```
 
-The production server sends everything in `_immutable/` with `Cache-Control: public, immutable, max-age=31536000`.
+The production server sends everything in `_immutable/` with `Cache-Control: public, immutable, max-age=31536000`, and public files without a `Cache-Control` header.
 
 ### `client.head(...entries)`
 

@@ -20,6 +20,7 @@ await build({
 	development: process.execArgv.includes("--watch") || Bun.env.DEV === "1",
 	server: "src/server/app.ts",
 	client: { entrypoints: ["src/client/a.ts", "./src/client/b.ts", "src/client/main.css"] },
+	public: "public",
 });
 await vercel();
 `,
@@ -52,6 +53,11 @@ export default {
 };
 `,
 	"src/server/note.md": "# a note\n",
+	"public/robots.txt": "User-agent: *\n",
+	"public/icons/favicon.svg": `<svg xmlns="http://www.w3.org/2000/svg"></svg>`,
+	"public/.well-known/client.json": `{"client_id":"https://example.com/.well-known/client.json"}`,
+	// the app's route has the same path
+	"public/own": "from the public folder",
 	"src/client/a.ts": `import { shared } from "../lib/shared.ts";
 import "./a.css";
 
@@ -137,6 +143,9 @@ const serve = async (cmd: string[], cwd: string, env: Record<string, string> = {
 	return { proc, origin, get, text: async (pathname: string) => (await get(pathname)).text() };
 };
 
+const publicFiles = [".well-known/client.json", "icons/favicon.svg", "own", "robots.txt"];
+const hashed = (files: string[]) => files.filter((file) => !publicFiles.includes(file));
+
 /** A WebSocket and the messages it has received. */
 const socket = async (url: string) => {
 	const messages: string[] = [];
@@ -192,7 +201,7 @@ describe("build", () => {
 		const all = await walk(dist());
 		expect(all).toContain("server/app.js");
 		expect(all).toContain("server/manifest.json");
-		const client = all.filter((file) => file.startsWith("client/"));
+		const client = hashed(all.filter((file) => file.startsWith("client/")).map((f) => f.slice(7))).map((f) => "client/" + f);
 		expect(client.length).toBeGreaterThan(0);
 		for (const file of client) expect(file).toMatch(/^client\/_immutable\/[\w.-]+-[a-z0-9]{8}\.\w+$/);
 	});
@@ -257,8 +266,15 @@ describe("build", () => {
 		expect(css).toContain("/" + fonts[0]);
 	});
 
+	test("copies the public folder into the client, dotfiles too", async () => {
+		for (const file of publicFiles) {
+			expect(await Bun.file(dist("client", file)).text()).toBe(files["public/" + file] as string);
+			expect(built.files).toContain(file);
+		}
+	});
+
 	test("prints each file and the build time", () => {
-		for (const file of built.files) expect(result.stdout).toContain(path.basename(file));
+		for (const file of hashed(built.files)) expect(result.stdout).toContain(path.basename(file));
 		expect(result.stdout).toContain("dist/server/app.js");
 		expect(result.stdout).toMatch(/gzip: +[\d.]+ kB/);
 		expect(result.stdout).toMatch(/✓ built in \d+ ms/);
@@ -307,12 +323,26 @@ describe("build", () => {
 		});
 
 		test("serves hashed files as immutable", async () => {
-			for (const file of built.files) {
+			for (const file of hashed(built.files)) {
 				const res = await app.get("/" + file);
 				expect(res.status).toBe(200);
 				expect(res.headers.get("cache-control")).toBe("public, immutable, max-age=31536000");
 				expect(await res.bytes()).toEqual(await Bun.file(dist("client", file)).bytes());
 			}
+		});
+
+		test("serves public files at their path, not as immutable", async () => {
+			for (const file of publicFiles.filter((file) => file !== "own")) {
+				const res = await app.get("/" + file);
+				expect(res.status).toBe(200);
+				expect(res.headers.get("cache-control")).toBeNull();
+				expect(await res.text()).toBe(files["public/" + file] as string);
+			}
+			expect((await app.get("/icons/favicon.svg")).headers.get("content-type")).toStartWith("image/svg+xml");
+		});
+
+		test("the app's routes come before public files", async () => {
+			expect(await app.text("/own")).toBe("own route");
 		});
 
 		test("sends each file's content type", async () => {
@@ -490,6 +520,23 @@ describe("development", () => {
 		await Bun.sleep(50);
 		expect(reload.messages.length).toBe(before);
 		ws.close();
+	});
+
+	test("serves public files at their path, uncached", async () => {
+		for (const file of publicFiles.filter((file) => file !== "own")) {
+			const res = await app.get("/" + file);
+			expect(res.status).toBe(200);
+			expect(res.headers.get("cache-control")).toBe("no-cache");
+			expect(await res.text()).toBe(files["public/" + file] as string);
+		}
+		expect(await app.text("/own")).toBe("own route");
+	});
+
+	test("serves a public file's edits, and files added to the folder", async () => {
+		await write("public/robots.txt", "User-agent: edited\n");
+		await until(async () => (await app.text("/robots.txt")) === "User-agent: edited\n");
+		await reloaded(() => write("public/new/file.txt", "new"));
+		expect(await app.text("/new/file.txt")).toBe("new");
 	});
 
 	test("a request that isn't a WebSocket gets a 400 from the reload route", async () => {
