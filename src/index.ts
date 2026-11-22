@@ -217,7 +217,9 @@ export type BuildOptions = {
 	 * A folder whose files are served as they are, at their path in it:
 	 * `"public"` serves `public/favicon.svg` at `/favicon.svg`. For files that
 	 * need a fixed address. The build copies them into `dist/client/`, and
-	 * they aren't cached as immutable. The app's own routes come first.
+	 * they aren't cached as immutable. A public file is answered before the
+	 * app's `fetch`, as Vercel serves static files before the function; only
+	 * the app's Bun `routes` come before it.
 	 */
 	public?: string;
 };

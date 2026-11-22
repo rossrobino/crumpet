@@ -76,7 +76,7 @@ export default {
 - `development`: `true` serves the app with the client built in memory and reloads pages on changes. `false`, the default, writes `dist/`.
 - `server`: the app's module.
 - `client`: `Bun.build` options for the client, so `plugins` and `define` apply in dev and in the build. crumpet sets `outdir`, `naming`, `publicPath`, `splitting` and `metafile`.
-- `public`: a folder whose files are served as they are at their path in it, for files that need a fixed address, such as `/favicon.ico`, `/robots.txt` or `/.well-known/…`. `public: "public"` serves `public/robots.txt` at `/robots.txt`. There's no default: without it, no folder is served. The app's own routes come first.
+- `public`: a folder whose files are served as they are at their path in it, for files that need a fixed address, such as `/favicon.ico`, `/robots.txt` or `/.well-known/…`. `public: "public"` serves `public/robots.txt` at `/robots.txt`. There's no default: without it, no folder is served. A public file is answered before the app's `fetch`, in dev, in production and on Vercel, which serves static files before the function; only the app's Bun `routes` come before it. So don't keep a file at a path the app answers.
 
 In development the server runs unbundled, `bun --watch` restarts it when server code changes, and crumpet rebuilds the client when client files change. The dev server listens on `localhost` unless the app sets `hostname`. For local HTTPS, which some auth libraries need, put `tls: { cert: Bun.file("…"), key: Bun.file("…") }` in the default export; Bun reads those paths from the folder you run the command in.
 
