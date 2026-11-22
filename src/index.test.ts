@@ -9,8 +9,8 @@ const crumpet = path.join(import.meta.dir, "index.ts");
 
 /** A marker in the module both entry points import, to find where it was bundled. */
 const marker = "shared-module-marker";
-// Bun inlines files under 128 KiB into the CSS as `data:` URLs; this one stays a file
-const font = new Uint8Array(200_000).map((_, i) => (i * 31) % 251);
+// small enough that Bun would inline it into the CSS as a `data:` URL; crumpet keeps it a file
+const font = new Uint8Array(20_000).map((_, i) => (i * 31) % 251);
 
 const files: Record<string, string | Uint8Array> = {
 	"tsconfig.json": JSON.stringify({ compilerOptions: { paths: { crumpet: [crumpet] } } }),
@@ -264,6 +264,16 @@ describe("build", () => {
 		expect(await Bun.file(dist("client", fonts[0]!)).bytes()).toEqual(font);
 		const css = await Bun.file(dist("client", built.entries["src/client/main.css"]!.styles[0]!)).text();
 		expect(css).toContain("/" + fonts[0]);
+		expect(css).not.toContain("data:");
+	});
+
+	test("a font keeps its URL across builds", async () => {
+		const again = await fixture({ "src/client/main.css": `@font-face { font-family: "g"; src: url("./font.woff2"); }\n` });
+		await run(["bun", "build.ts"], again);
+		const other: Built = await Bun.file(path.join(again, "dist/server/manifest.json")).json();
+		expect(other.files.filter((file) => file.endsWith(".woff2"))).toEqual(
+			built.files.filter((file) => file.endsWith(".woff2")),
+		);
 	});
 
 	test("copies the public folder into the client, dotfiles too", async () => {
@@ -479,6 +489,15 @@ describe("development", () => {
 		const js = await app.text(scripts(html)[0]!);
 		expect(js).toContain("sourceMappingURL=data:");
 		expect(js).toContain("\n");
+	});
+
+	test("keeps a font the CSS uses a file, at the URL `client.url()` gives it", async () => {
+		const html = await app.text("/head?e=src/client/main.css");
+		const css = await app.text(styles(html)[0]!);
+		expect(css).not.toContain("data:");
+		const url = await app.text("/font");
+		expect(css).toContain(url);
+		expect(await (await app.get(url)).bytes()).toEqual(font);
 	});
 
 	test("`client.url()` is a dev route for the file", async () => {

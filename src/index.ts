@@ -1,5 +1,7 @@
 // crumpet: `build()`, `client` and the dev and production servers, on top of Bun.
-import type { BuildConfig, BuildOutput, Server } from "bun";
+import type { BuildConfig, BuildOutput, BunPlugin, Server } from "bun";
+// a plugin's `onResolve` can't wait for a promise
+import { existsSync, readFileSync } from "node:fs";
 // Bun has no file watcher, recursive delete or rename of its own, and `path` is plain string work
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -97,9 +99,43 @@ export const client = {
 	},
 };
 
+/** Font files, by extension. */
+const fontFile = /\.(woff2?|ttf|otf|eot)$/;
+
+/**
+ * Keeps fonts as files of their own. Bun inlines files under 128 KiB into the
+ * CSS as `data:` URLs: the page couldn't draw until every font had arrived
+ * with the stylesheet, and a change to the CSS would download them again. A
+ * font a stylesheet uses gets `fontURL(file)` instead, and so does a font the
+ * server imports, so both are one URL and a preload of it isn't downloaded twice.
+ *
+ * @param fontURL the URL of a font, from its absolute path
+ */
+const fonts = (fontURL: (file: string) => string): BunPlugin => ({
+	name: "crumpet-fonts",
+	setup(build) {
+		// a `url()` in a stylesheet; not a URL with a scheme, a path from the root or an `@import`
+		build.onResolve({ filter: /^[^:/][^:]*\.(woff2?|ttf|otf|eot)([?#].*)?$/ }, (args) => {
+			if (!args.importer.endsWith(".css") || args.kind === "import-rule") return;
+			// `font.woff2?v=1#name` is the file `font.woff2`
+			const [name, rest = ""] = args.path.split(/(?=[?#])(.*)/s);
+			const file = path.resolve(args.resolveDir, name!);
+			// a file that isn't there is left to Bun, which reports it
+			if (!existsSync(file)) return;
+			return { path: fontURL(file) + rest, external: true };
+		});
+		// `import font from "./font.woff2"` in the server or a client script
+		build.onLoad({ filter: fontFile }, (args) => ({
+			contents: `export default ${JSON.stringify(fontURL(args.path))};`,
+			loader: "js",
+		}));
+	},
+});
+
 /** The app's client options with crumpet's own on top. */
-const clientConfig = (client: BuildConfig): BuildConfig => ({
+const clientConfig = (client: BuildConfig, fontURL: (file: string) => string): BuildConfig => ({
 	...client,
+	plugins: [fonts(fontURL), ...(client.plugins ?? [])],
 	naming: {
 		entry: "_immutable/[name]-[hash].[ext]",
 		chunk: "_immutable/[name]-[hash].[ext]",
@@ -252,7 +288,12 @@ const dev = async (options: BuildOptions) => {
 	// the app and the first client build, at the same time; the app is imported
 	// here so it's in this process's module graph and `bun --watch` restarts on its changes
 	// `throw: false`: a build that fails is logged, and the last one stays up
-	const config: BuildConfig = { sourcemap: "inline", ...clientConfig(options.client), throw: false };
+	// a font is served from its own file, like a file `client.url()` returns
+	const config: BuildConfig = {
+		sourcemap: "inline",
+		...clientConfig(options.client, client.url),
+		throw: false,
+	};
 	const [{ default: app }, first] = await Promise.all([
 		import(path.resolve(options.server)) as Promise<{ default: App }>,
 		Bun.build(config),
@@ -426,10 +467,25 @@ const bundle = async (options: BuildOptions) => {
 	// only exists in memory, through `Bun.build`'s `files`
 	const entry = path.resolve(".crumpet-entry.ts");
 	const pub = await publicFiles(options.public);
+
+	/** Fonts the builds use, relative to `dist/client/`, by their path. */
+	const fontFiles = new Map<string, string>();
+	const fontURL = (file: string) => {
+		let out = fontFiles.get(file);
+		if (!out) {
+			const { name, ext } = path.parse(file);
+			// from the content, like Bun's hashes: the same font keeps its URL across builds
+			const hash = Bun.hash(readFileSync(file)).toString(36).padStart(8, "0").slice(-8);
+			out = `_immutable/${name}-${hash}${ext}`;
+			fontFiles.set(file, out);
+		}
+		return "/" + out;
+	};
+
 	const [clientResult, serverResult] = await Promise.all([
 		Bun.build({
 			minify: true,
-			...clientConfig(options.client),
+			...clientConfig(options.client, fontURL),
 			outdir: "dist/client",
 			// a build that fails throws, with Bun's own errors
 			throw: true,
@@ -446,8 +502,9 @@ export const vercel = (options) => onVercel(app, options);
 `,
 			},
 			target: "bun",
+			plugins: [fonts(fontURL)],
 			// the bundle goes to `dist/server/`, and files it imports, such as
-			// fonts, straight to `dist/client/_immutable/` with the client's files
+			// images, straight to `dist/client/_immutable/` with the client's files
 			outdir: "dist/client",
 			naming: {
 				entry: "../server/app.js",
@@ -466,9 +523,10 @@ export const vercel = (options) => onVercel(app, options);
 	const files = [...clientResult.outputs, ...serverResult.outputs]
 		.filter((o) => o.size > 0 && o.path.startsWith(client + path.sep))
 		.map((o) => path.relative(client, o.path))
-		.concat(pub);
+		.concat(pub, [...fontFiles.values()]);
 
 	await Promise.all([
+		...[...fontFiles].map(([file, out]) => Bun.write(path.join("dist/client", out), Bun.file(file))),
 		...empty.map((o) => Bun.file(o.path).delete()),
 		Bun.write(
 			"dist/server/manifest.json",
@@ -483,7 +541,8 @@ export const vercel = (options) => onVercel(app, options);
 	await report(
 		[...new Set([...clientResult.outputs, ...serverResult.outputs])]
 			.filter((o) => o.size > 0)
-			.map((o) => path.relative(process.cwd(), o.path)),
+			.map((o) => path.relative(process.cwd(), o.path))
+			.concat([...fontFiles.values()].map((out) => path.join("dist/client", out))),
 		ms,
 	);
 };

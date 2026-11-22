@@ -126,7 +126,15 @@ Options: `config` (the function's memory, duration and regions), `isr`, `images`
 ## Things to know
 
 - **Tailwind** works as a client plugin: `client: { entrypoints, plugins: [tailwind] }` with `bun-plugin-tailwind`.
-- **Don't preload a font under 128 KB that the CSS uses.** Bun inlines files that small into the stylesheet, so the font arrives with the CSS and a preload would download it again.
+- **Fonts stay files.** Bun inlines files under 128 KB that CSS uses as `data:` URLs; crumpet keeps fonts (`.woff2`, `.woff`, `.ttf`, `.otf`, `.eot`) as hashed files, so the page draws without waiting for them and they stay cached when the CSS changes. A font the server imports has the same URL as in the CSS, so preload it with `client.url()`:
+
+  ```tsx
+  import font from "./font.woff2";
+
+  <link rel="preload" href={client.url(font)} as="font" type="font/woff2" crossorigin="anonymous" />;
+  ```
+
+  Other small files, such as images, are still inlined by Bun.
 - **Types for file imports are the app's.** Bun declares only a few extensions, so declare the rest, such as `*.svg`, in a `.d.ts` file. See [`example/src/env.d.ts`](./example/src/env.d.ts).
 - **Text imports** use `with { type: "text" }`, and path aliases come from tsconfig `paths`. Both are Bun's.
 
