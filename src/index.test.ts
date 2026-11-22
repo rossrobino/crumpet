@@ -365,7 +365,7 @@ describe("build", () => {
 			for (const file of publicFiles) {
 				const res = await app.get(at(file));
 				expect(res.status).toBe(200);
-				expect(res.headers.get("cache-control")).toBeNull();
+				expect(res.headers.get("cache-control")).toBe("public, max-age=0, must-revalidate");
 				expect(await res.text()).toBe(files["public/" + file] as string);
 			}
 			expect((await app.get("/icons/favicon.svg")).headers.get("content-type")).toStartWith("image/svg+xml");

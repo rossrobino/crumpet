@@ -92,7 +92,7 @@ dist/
   server/manifest.json which files each entry point needs
 ```
 
-The production server sends everything in `_immutable/` with `Cache-Control: public, immutable, max-age=31536000`, and public files without a `Cache-Control` header.
+The production server sends everything in `_immutable/` with `Cache-Control: public, immutable, max-age=31536000`, and public files with `Cache-Control: public, max-age=0, must-revalidate`, as Vercel does, so browsers check them again on each use.
 
 ### `client.head(...entries)`
 

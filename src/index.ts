@@ -501,7 +501,8 @@ export const production = (app: App) => {
 		routes: {
 			...appRoutes(app),
 			...fileRoutes(dir, built!.files, (file): HeadersInit =>
-				file.startsWith("_immutable/") ? { "cache-control": "public, immutable, max-age=31536000" } : {},
+				// a public file is checked again on every use, as Vercel's CDN sends it
+				file.startsWith("_immutable/") ? { "cache-control": "public, immutable, max-age=31536000" } : { "cache-control": "public, max-age=0, must-revalidate" },
 			),
 		},
 	} as App;
