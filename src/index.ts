@@ -69,21 +69,20 @@ export const client = {
 		let html = heads.get(key);
 		if (html !== undefined) return html;
 
-		const seen = new Set<string>();
-		const tag = (url: string, markup: string) => {
-			if (!seen.has(url)) html += markup;
-			seen.add(url);
-		};
-		html = "";
+		// every entry's stylesheets, then preloads, then scripts, each once
+		const tags = { styles: new Set<string>(), preloads: new Set<string>(), scripts: new Set<string>() };
 		for (const name of entries.length ? entries : Object.keys(manifest)) {
 			// the manifest's names are normalized: `./src/main.ts` is `src/main.ts`
 			const entry = manifest[path.normalize(name)];
 			if (!entry) throw new Error(`crumpet: "${name}" is not a client entry point.`);
-			for (const url of entry.styles) tag(url, `<link rel="stylesheet" href="${url}">`);
-			for (const url of entry.preloads) tag(url, `<link rel="modulepreload" href="${url}">`);
-			for (const url of entry.scripts) tag(url, `<script type="module" src="${url}"></script>`);
+			for (const kind of ["styles", "preloads", "scripts"] as const)
+				for (const url of entry[kind]) tags[kind].add(url);
 		}
-		html += devScript;
+		html =
+			[...tags.styles].map((url) => `<link rel="stylesheet" href="${url}">`).join("") +
+			[...tags.preloads].map((url) => `<link rel="modulepreload" href="${url}">`).join("") +
+			[...tags.scripts].map((url) => `<script type="module" src="${url}"></script>`).join("") +
+			devScript;
 		heads.set(key, html);
 		return html;
 	},

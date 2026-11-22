@@ -386,6 +386,9 @@ describe("build", () => {
 		test("`client.head()` puts stylesheets before preloads before scripts", async () => {
 			const html = await app.text("/head?e=src/client/a.ts");
 			expect(html).toMatch(/^<link rel="stylesheet"[^>]+><link rel="modulepreload"[^>]+><script /);
+			// across entries too: a script entry first, a CSS entry after it
+			const both = await app.text("/head?e=src/client/b.ts&e=src/client/main.css");
+			expect(both).toMatch(/^<link rel="stylesheet"[^>]+><link rel="modulepreload"[^>]+><script [^>]+><\/script>$/);
 		});
 
 		test("`client.head()` throws for an unknown entry", async () => {

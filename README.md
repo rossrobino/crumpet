@@ -78,7 +78,7 @@ export default {
 - `client`: `Bun.build` options for the client, so `plugins` and `define` apply in dev and in the build. crumpet sets `outdir`, `naming`, `publicPath`, `splitting` and `metafile`.
 - `public`: a folder whose files are served as they are at their path in it, for files that need a fixed address, such as `/favicon.ico`, `/robots.txt` or `/.well-known/…`. `public: "public"` serves `public/robots.txt` at `/robots.txt`. There's no default: without it, no folder is served. The app's own routes come first.
 
-In development the server runs unbundled, `bun --watch` restarts it when server code changes, and crumpet rebuilds the client when client files change. The dev server listens on `localhost` unless the app sets `hostname`.
+In development the server runs unbundled, `bun --watch` restarts it when server code changes, and crumpet rebuilds the client when client files change. The dev server listens on `localhost` unless the app sets `hostname`. For local HTTPS, which some auth libraries need, put `tls: { cert: Bun.file("…"), key: Bun.file("…") }` in the default export; Bun reads those paths from the folder you run the command in.
 
 A build writes:
 
