@@ -218,8 +218,8 @@ export type BuildOptions = {
 	 * `"public"` serves `public/favicon.svg` at `/favicon.svg`. For files that
 	 * need a fixed address. The build copies them into `dist/client/`, and
 	 * they aren't cached as immutable. A public file is answered before the
-	 * app's `fetch`, as Vercel serves static files before the function; only
-	 * the app's Bun `routes` come before it.
+	 * app, its `routes` and `fetch` alike, in dev, in production and on Vercel,
+	 * whose CDN serves files before the function.
 	 */
 	public?: string;
 };
@@ -372,7 +372,8 @@ const dev = async (options: BuildOptions) => {
 		drain: (ws) => (ws.data === reload ? undefined : theirs?.drain?.(ws)),
 	};
 
-	const routes = (client: Record<string, Response>) => ({ ...pub, ...fixed, ...client, ...appRoutes(app) });
+	// files first, then the app, as in production and on Vercel
+	const routes = (client: Record<string, Response>) => ({ ...appRoutes(app), ...pub, ...fixed, ...client });
 
 	if (!first.success) console.error(first.logs);
 	for (const root of roots) watch(root, true);
@@ -440,7 +441,9 @@ export const production = (app: App) => {
 		...app,
 		// Bun.serve runs in development mode unless NODE_ENV is production
 		development: false,
+		// files first, then the app, as on Vercel, whose CDN serves them before the function
 		routes: {
+			...appRoutes(app),
 			...Object.fromEntries(
 				built!.files.map((file) => [
 					route(file),
@@ -451,7 +454,6 @@ export const production = (app: App) => {
 					}),
 				]),
 			),
-			...appRoutes(app),
 		},
 	} as App;
 };

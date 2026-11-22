@@ -29,7 +29,7 @@ import font from "../client/font.woff2";
 import note from "./note.md" with { type: "text" };
 
 export default {
-	routes: { "/own": new Response("own route") },
+	routes: { "/own": new Response("own route"), "/clash": new Response("the app's route") },
 	fetch(req: Request, server: Bun.Server<undefined>) {
 		const url = new URL(req.url);
 		if (url.pathname === "/head") {
@@ -41,6 +41,7 @@ export default {
 		}
 		if (url.pathname === "/font") return new Response(client.url(font));
 		if (url.pathname === "/note") return new Response(note);
+		if (url.pathname === "/robots.txt") return new Response("the app's robots.txt");
 		if (url.pathname === "/development") return new Response(String(server.development));
 		if (url.pathname === "/ws") return server.upgrade(req) ? undefined : new Response(null, { status: 400 });
 		return new Response("not found", { status: 404 });
@@ -57,7 +58,7 @@ export default {
 	"public/icons/favicon.svg": `<svg xmlns="http://www.w3.org/2000/svg"></svg>`,
 	"public/.well-known/client.json": `{"client_id":"https://example.com/.well-known/client.json"}`,
 	// the app's route has the same path
-	"public/own": "from the public folder",
+	"public/clash": "from the public folder",
 	"src/client/a.ts": `import { shared } from "../lib/shared.ts";
 import "./a.css";
 
@@ -143,7 +144,7 @@ const serve = async (cmd: string[], cwd: string, env: Record<string, string> = {
 	return { proc, origin, get, text: async (pathname: string) => (await get(pathname)).text() };
 };
 
-const publicFiles = [".well-known/client.json", "icons/favicon.svg", "own", "robots.txt"];
+const publicFiles = [".well-known/client.json", "clash", "icons/favicon.svg", "robots.txt"];
 const hashed = (files: string[]) => files.filter((file) => !publicFiles.includes(file));
 
 /** A WebSocket and the messages it has received. */
@@ -342,7 +343,7 @@ describe("build", () => {
 		});
 
 		test("serves public files at their path, not as immutable", async () => {
-			for (const file of publicFiles.filter((file) => file !== "own")) {
+			for (const file of publicFiles) {
 				const res = await app.get("/" + file);
 				expect(res.status).toBe(200);
 				expect(res.headers.get("cache-control")).toBeNull();
@@ -351,8 +352,9 @@ describe("build", () => {
 			expect((await app.get("/icons/favicon.svg")).headers.get("content-type")).toStartWith("image/svg+xml");
 		});
 
-		test("the app's routes come before public files", async () => {
-			expect(await app.text("/own")).toBe("own route");
+		test("public files come before the app's routes and `fetch`", async () => {
+			expect(await app.text("/clash")).toBe("from the public folder");
+			expect(await app.text("/robots.txt")).toBe("User-agent: *\n");
 		});
 
 		test("sends each file's content type", async () => {
@@ -545,13 +547,14 @@ describe("development", () => {
 	});
 
 	test("serves public files at their path, uncached", async () => {
-		for (const file of publicFiles.filter((file) => file !== "own")) {
+		for (const file of publicFiles) {
 			const res = await app.get("/" + file);
 			expect(res.status).toBe(200);
 			expect(res.headers.get("cache-control")).toBe("no-cache");
 			expect(await res.text()).toBe(files["public/" + file] as string);
 		}
-		expect(await app.text("/own")).toBe("own route");
+		// before the app's routes and `fetch`, as in production
+		expect(await app.text("/clash")).toBe("from the public folder");
 	});
 
 	test("serves a public file's edits, and files added to the folder", async () => {
