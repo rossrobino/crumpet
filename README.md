@@ -158,6 +158,9 @@ bun install
 bun test         # runs a small app through build, production and dev
 bun run check    # type check
 bun run build    # dist/, built with Bun
+bun changeset    # describe a change for the next release
 ```
+
+Releases are made with [Changesets](https://changesets.dev): a change with a changeset on `main` opens a "Version Packages" pull request, and merging it publishes to npm from GitHub Actions with provenance.
 
 The Tailwind tests use the example's packages, so run `bun install` in `example/` too.

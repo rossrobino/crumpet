@@ -40,9 +40,13 @@
 		"build": "bun build.ts",
 		"check": "bun check",
 		"test": "bun test",
-		"prepublishOnly": "bun run check && bun test && bun run build"
+		"prepublishOnly": "bun run check && bun test && bun run build",
+		"changeset": "changeset",
+		"version": "changeset version",
+		"release": "changeset publish"
 	},
 	"devDependencies": {
+		"@changesets/cli": "^3.0.3",
 		"@robino/tsconfig": "^3.0.0",
 		"@types/bun": "^1.4.4",
 		"typescript": "^7.0.2"
