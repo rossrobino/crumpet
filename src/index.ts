@@ -520,6 +520,9 @@ const bundle = async (options: BuildOptions) => {
 	// only exists in memory, through `Bun.build`'s `files`
 	const entry = path.resolve(".crumpet-entry.ts");
 	const pub = await publicFiles(options.public);
+	// before the builds: on Linux, Bun's cp fails with EEXIST when the folder
+	// appears while it copies
+	if (options.public) await fs.cp(options.public, "dist/client", { recursive: true });
 
 	/** Fonts the builds use, relative to `dist/client/`, by their path. */
 	const fontFiles = new Map<string, string>();
@@ -568,7 +571,6 @@ export const vercel = (options) => onVercel(app, options);
 			// folds `bundled` and drops dev-only code; names and lines stay readable
 			minify: { syntax: true },
 		}),
-		options.public && fs.cp(options.public, "dist/client", { recursive: true }),
 	]);
 	// a CSS entry point also writes an empty JavaScript file
 	const empty = clientResult.outputs.filter((o) => o.size === 0);

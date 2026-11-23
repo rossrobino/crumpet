@@ -220,8 +220,8 @@ export const vercel = async (options: VercelOptions = {}) => {
 		Bun.write(path.join(out, file), JSON.stringify(value, null, "\t"));
 
 	await fs.rm(out, { recursive: true, force: true });
-	// before the files written into `fn`: Bun 1.4.4's cp, which Vercel builds
-	// with, fails with EEXIST when the folder appears while it copies
+	// before the files written into `fn`: on Linux, Bun's cp fails with EEXIST
+	// when the folder appears while it copies
 	await fs.cp("dist/server", fn, { recursive: true });
 	await Promise.all([
 		fs.cp("dist/client", path.join(out, "static"), { recursive: true }),
