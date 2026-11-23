@@ -6,7 +6,7 @@ crumpet is a thin layer over `Bun.build` and `Bun.serve`. It runs a dev server t
 
 It works with anything that has a `fetch` handler: [ovr](https://github.com/rossrobino/ovr) is the main use, and [Hono](https://hono.dev) or a hand-written `fetch` work the same way. crumpet is the Bun version of [domco](https://github.com/rossrobino/domco), which stays the Vite version. The build output has the same shape, so an app can move between the two.
 
-> Early release, tested on Bun 1.4.5 and later. The Vercel output is tested locally but hasn't been deployed yet.
+> Early release, tested on Bun 1.4.4 and later. The Vercel output has been deployed to production.
 
 ## The idea
 
@@ -21,7 +21,7 @@ It works with anything that has a `fetch` handler: [ovr](https://github.com/ross
 bun add -d crumpet
 ```
 
-crumpet needs Bun 1.4.5 or later.
+crumpet needs Bun 1.4.4 or later.
 
 ## Set up
 
@@ -124,6 +124,13 @@ await vercel({ isr: { expiration: 60 } });
 ```
 
 Options: `config` (the function's memory, duration and regions), `isr`, `images` and `trailingSlash`.
+
+Vercel builds with its own Bun, 1.4.4 today, and runs the `bun1.x` function on an older one, 1.3.14 today, whatever `engines` says. crumpet's bundle works there, but the app's own code runs on that older Bun: on 1.3, for example, `Bun.sql` results have no `columns` and array parameters are sent as text. To try it locally:
+
+```sh
+bunx bun@1.4.4 build.ts
+bunx bun@1.3.14 dist/server/app.js
+```
 
 ## Things to know
 
