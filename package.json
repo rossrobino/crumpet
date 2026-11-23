@@ -1,7 +1,7 @@
 {
 	"name": "crumpet",
 	"description": "A full-stack toolchain for Bun",
-	"version": "0.0.5",
+	"version": "0.0.6",
 	"author": {
 		"name": "Ross Robino",
 		"url": "https://robino.dev"
